@@ -3,9 +3,12 @@ from setuptools import setup, find_packages
 
 version = '1.0dev0'
 
+long_description = (open('CHANGES.txt').read())
+
 setup(
     name="mdtools.relstorage",
     description="Tools for Relstorage",
+    long_description=long_description,
     version=version,
     packages=find_packages('src'),
     include_package_data=True,
