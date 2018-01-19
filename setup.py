@@ -1,7 +1,7 @@
 import os
 from setuptools import setup, find_packages
 
-version = '1.0dev0'
+version = '1.0'
 
 long_description = (open('CHANGES.txt').read())
 
