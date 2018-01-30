@@ -1,4 +1,3 @@
-import os
 from setuptools import setup, find_packages
 
 version = '1.1.dev0'
@@ -17,6 +16,7 @@ setup(
     package_dir={'': 'src'},
     install_requires=[
         'Relstorage',
+        'zodbupdate',
         'ZODB',
         'ZEO',
         'setuptools',
@@ -28,6 +28,7 @@ setup(
             'zodbsearch = mdtools.relstorage.search:main',
             'zodblinks = mdtools.relstorage.links:main',
             'sqlpack = mdtools.relstorage.sqlpack:main',
+            'relupdate = mdtools.relstorage.update:main',
         ],
     },
 )
