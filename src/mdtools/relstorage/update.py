@@ -1,5 +1,5 @@
-import io
 import time
+import io
 import contextlib
 import base64
 import psycopg2
@@ -48,26 +48,21 @@ class Updater(object):
     def ids_batch_from_database(self, batch_size=100000):
         # Reading ids is expensive because of the sort, so we do
         # larger requests here.
-        fetch_offset = 0
-        fetch_size = batch_size * 50
-        fetch_count = 1
-        done = False
-        while not done:
-            logger.info('{}> Fetch ids #{}'.format(self.name, fetch_count))
+        offset = 0
+        count = 1
+        while True:
+            logger.info('{}> Fetch ids #{}'.format(self.name, count))
             with self.new_connection() as cursor:
                 cursor.execute(
                     "SELECT zoid FROM object_state "
                     "ORDER BY zoid LIMIT %s OFFSET %s",
-                    (fetch_size, fetch_offset))
+                    (batch_size, offset))
                 oids = [result[0] for result in cursor.fetchall()]
-            fetch_offset += fetch_size
-            fetch_count += 1
-            for b in range(50):
-                oids_batch = oids[batch_size * b:batch_size * (b + 1)]
-                if not oids_batch:
-                    done = True
-                    break
-                yield oids_batch
+            if not oids:
+                break
+            offset += batch_size
+            count += 1
+            yield oids
 
     def read_batch(self, ids_batch):
         for index, oids in enumerate(ids_batch):
@@ -131,8 +126,9 @@ def worker_process(incoming, outgoing, empty, dsn, name):
     def ids_batch_from_master():
         while True:
             try:
-                ids = incoming.get(block=True, timeout=5)
+                ids = incoming.get(block=True, timeout=1)
             except Queue.Empty:
+                logger.info('{}> I am starving'.format(name))
                 wake_up_master()
                 continue
             if ids is None:
@@ -145,44 +141,69 @@ def worker_process(incoming, outgoing, empty, dsn, name):
             outgoing.put(True)
     finally:
         outgoing.put(None)
+        logger.info('{}> I am done'.format(name))
         wake_up_master()
 
 
 def multi_process(dsn, processes_count=4, queue_size=8, batch_size=100000):
-    ids_done = False
     workers = {}
     empty = multiprocessing.Condition()
     updater = Updater(dsn, 'master')
-    ids_batch = updater.ids_batch_from_database(batch_size)
+    fetch_factor = processes_count * queue_size * 2
+
+    def split_ids_batch(batch):
+        if batch:
+            for factor in range(fetch_factor):
+                part = batch[batch_size * factor:batch_size * (factor + 1)]
+                if not part:
+                    break
+                yield part
+
+    ids_done = False
+    ids_batch = updater.ids_batch_from_database(batch_size * fetch_factor)
+    ids_stack = list(split_ids_batch(next(ids_batch)))
 
     # Create workers.
     for worker_index in range(processes_count):
+        if not ids_stack:
+            logger.info('master> We ran out of things to do')
+            break
         worker_name = 'worker-{}'.format(worker_index + 1)
         incoming = multiprocessing.Queue(queue_size + 1)
         outgoing = multiprocessing.Queue(queue_size + 1)
         for queue_index in range(queue_size):
-            try:
-                ids = next(ids_batch)
-            except StopIteration:
-                ids_done = queue_index == 0
+            if not ids_stack:
                 break
-            incoming.put(ids)
-        if ids_done:
-            logger.info('master> We ran out of things to do')
-            break
+            incoming.put(ids_stack.pop())
         logger.info('master> Starting worker {}'.format(worker_name))
         worker = multiprocessing.Process(
             target=worker_process,
             args=(incoming, outgoing, empty, dsn, worker_name))
         worker.start()
         workers[worker_name] = (worker, incoming, outgoing)
-        time.sleep(5)
+        # Sleep to have workers out of sync
+        time.sleep(processes_count * 2)
 
     # Feed work.
+    cycle = 0
     while len(workers):
-        empty.acquire()
-        empty.wait()
-        empty.release()
+        cycle += 1
+        if not ids_done and len(ids_stack) <= (fetch_factor / 2):
+            # Fetch new ids to work on while workers are doing something else.
+            try:
+                ids = next(ids_batch)
+            except StopIteration:
+                logger.info('master> Got all ids #{}'.format(cycle))
+                ids_done = True
+            else:
+                ids_stack.extend(split_ids_batch(ids))
+            ids = None
+        else:
+            logger.info('master> Sleeping #{}'.format(cycle))
+            empty.acquire()
+            empty.wait(120)
+            empty.release()
+            logger.info('master> Someone woke me up #{}'.format(cycle))
 
         for worker_name, worker_info in list(workers.items()):
             worker, incoming, outgoing = worker_info
@@ -199,7 +220,8 @@ def multi_process(dsn, processes_count=4, queue_size=8, batch_size=100000):
                     worker_done = True
                     break
             if worker_done:
-                logger.info('master> Worker {} is done'.format(worker_name))
+                logger.info('master> Worker {} is done #{}'.format(
+                    worker_name, cycle))
                 worker.join()
                 del workers[worker_name]
                 continue
@@ -209,14 +231,10 @@ def multi_process(dsn, processes_count=4, queue_size=8, batch_size=100000):
                     incoming.put(None)
                 else:
                     for queue_index in range(ids_completed):
-                        try:
-                            ids = next(ids_batch)
-                        except StopIteration:
-                            logger.info('master> We ran out of things to do')
-                            ids_done = True
+                        if not ids_stack:
                             incoming.put(None)
                             break
-                        incoming.put(ids)
+                        incoming.put(ids_stack.pop())
 
 
 def main():
