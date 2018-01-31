@@ -185,6 +185,11 @@ def multi_process(dsn, processes_count=None, queue_size=5, batch_size=100000):
         workers[worker_name] = (worker, incoming, outgoing)
         # Sleep to have workers out of sync
         time.sleep(5)
+    if not ids_stack:
+        # Stack is empty, we did not have enough for the first round,
+        # but we should have had more than needed so it means we are
+        # out of ids.
+        ids_done = True
 
     # Feed work.
     cycle = 0
