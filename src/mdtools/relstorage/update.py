@@ -1,4 +1,5 @@
 import io
+import time
 import contextlib
 import base64
 import psycopg2
@@ -45,18 +46,28 @@ class Updater(object):
         connection.close()
 
     def ids_batch_from_database(self, batch_size=100000):
-        offset = 0
-        while True:
+        # Reading ids is expensive because of the sort, so we do
+        # larger requests here.
+        fetch_offset = 0
+        fetch_size = batch_size * 50
+        fetch_count = 1
+        done = False
+        while not done:
+            logger.info('{}> Fetch ids #{}'.format(self.name, fetch_count))
             with self.new_connection() as cursor:
                 cursor.execute(
                     "SELECT zoid FROM object_state "
                     "ORDER BY zoid LIMIT %s OFFSET %s",
-                    (batch_size, offset))
+                    (fetch_size, fetch_offset))
                 oids = [result[0] for result in cursor.fetchall()]
-            if not oids:
-                break
-            yield oids
-            offset += batch_size
+            fetch_offset += fetch_size
+            fetch_count += 1
+            for b in range(50):
+                oids_batch = oids[batch_size * b:batch_size * (b + 1)]
+                if not oids_batch:
+                    done = True
+                    break
+                yield oids_batch
 
     def read_batch(self, ids_batch):
         for index, oids in enumerate(ids_batch):
@@ -141,14 +152,14 @@ def multi_process(dsn, processes_count=4, queue_size=8, batch_size=100000):
     ids_done = False
     workers = {}
     empty = multiprocessing.Condition()
-    updater = Updater(dsn)
+    updater = Updater(dsn, 'master')
     ids_batch = updater.ids_batch_from_database(batch_size)
 
     # Create workers.
     for worker_index in range(processes_count):
         worker_name = 'worker-{}'.format(worker_index + 1)
-        incoming = multiprocessing.Queue(queue_size)
-        outgoing = multiprocessing.Queue(queue_size)
+        incoming = multiprocessing.Queue(queue_size + 1)
+        outgoing = multiprocessing.Queue(queue_size + 1)
         for queue_index in range(queue_size):
             try:
                 ids = next(ids_batch)
@@ -159,12 +170,13 @@ def multi_process(dsn, processes_count=4, queue_size=8, batch_size=100000):
         if ids_done:
             logger.info('master> We ran out of things to do')
             break
-        logger.info('master> Starting worker #{}'.format(worker_name))
+        logger.info('master> Starting worker {}'.format(worker_name))
         worker = multiprocessing.Process(
             target=worker_process,
             args=(incoming, outgoing, empty, dsn, worker_name))
         worker.start()
         workers[worker_name] = (worker, incoming, outgoing)
+        time.sleep(5)
 
     # Feed work.
     while len(workers):
@@ -187,7 +199,7 @@ def multi_process(dsn, processes_count=4, queue_size=8, batch_size=100000):
                     worker_done = True
                     break
             if worker_done:
-                logger.info('master> Worker #{} is done'.format(worker_name))
+                logger.info('master> Worker {} is done'.format(worker_name))
                 worker.join()
                 del workers[worker_name]
                 continue
