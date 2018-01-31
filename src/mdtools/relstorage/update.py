@@ -145,7 +145,9 @@ def worker_process(incoming, outgoing, empty, dsn, name):
         wake_up_master()
 
 
-def multi_process(dsn, processes_count=4, queue_size=8, batch_size=100000):
+def multi_process(dsn, processes_count=None, queue_size=5, batch_size=100000):
+    if processes_count is None:
+        processes_count = multiprocessing.cpu_count()
     workers = {}
     empty = multiprocessing.Condition()
     updater = Updater(dsn, 'master')
@@ -182,7 +184,7 @@ def multi_process(dsn, processes_count=4, queue_size=8, batch_size=100000):
         worker.start()
         workers[worker_name] = (worker, incoming, outgoing)
         # Sleep to have workers out of sync
-        time.sleep(processes_count * 2)
+        time.sleep(5)
 
     # Feed work.
     cycle = 0
@@ -201,9 +203,9 @@ def multi_process(dsn, processes_count=4, queue_size=8, batch_size=100000):
         else:
             logger.info('master> Sleeping #{}'.format(cycle))
             empty.acquire()
-            empty.wait(120)
+            empty.wait(60)
             empty.release()
-            logger.info('master> Someone woke me up #{}'.format(cycle))
+            logger.info('master> Waking up #{}'.format(cycle))
 
         for worker_name, worker_info in list(workers.items()):
             worker, incoming, outgoing = worker_info
@@ -226,15 +228,11 @@ def multi_process(dsn, processes_count=4, queue_size=8, batch_size=100000):
                 del workers[worker_name]
                 continue
             if ids_completed:
-                if ids_done:
-                    # Send end of working.
-                    incoming.put(None)
-                else:
-                    for queue_index in range(ids_completed):
-                        if not ids_stack:
-                            incoming.put(None)
-                            break
-                        incoming.put(ids_stack.pop())
+                for queue_index in range(ids_completed):
+                    if not ids_stack:
+                        incoming.put(None)
+                        break
+                    incoming.put(ids_stack.pop())
 
 
 def main():
