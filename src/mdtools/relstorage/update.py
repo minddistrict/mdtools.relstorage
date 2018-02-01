@@ -54,12 +54,17 @@ class Updater(object):
         # larger requests here.
         offset = 0
         count = 1
+        logger.info('{}> Prepare ids'.format(self.name))
+        with self.new_connection() as cursor:
+            cursor.execute(
+                "CREATE MATERIALIZED VIEW sorted_zoid AS "
+                "SELECT zoid FROM object_state ORDER BY zoid;")
+
         while True:
             logger.info('{}> Fetch ids #{}'.format(self.name, count))
             with self.new_connection() as cursor:
                 cursor.execute(
-                    "SELECT zoid FROM object_state "
-                    "ORDER BY zoid LIMIT %s OFFSET %s",
+                    "SELECT * FROM sorted_zoid LIMIT %s OFFSET %s",
                     (batch_size, offset))
                 oids = [result[0] for result in cursor.fetchall()]
             if not oids:
@@ -67,6 +72,11 @@ class Updater(object):
             offset += batch_size
             count += 1
             yield oids
+
+        logger.info('{}> Cleanup ids'.format(self.name))
+        with self.new_connection() as cursor:
+            cursor.execute(
+                "DROP MATERIALIZED VIEW sorted_zoid")
 
     def read_batch(self, ids_batch):
         for index, oids in enumerate(ids_batch):
@@ -101,9 +111,13 @@ class Updater(object):
             logger.info('{}> Processing #{}'.format(self.name, index+1))
             result_batch = []
             for data, oid in incoming_batch:
-                output_file = processor.rename(decode_record(data))
-                if output_file is not None:
-                    result_batch.append((encode_record(output_file), oid))
+                try:
+                    output_file = processor.rename(decode_record(data))
+                    if output_file is not None:
+                        result_batch.append((encode_record(output_file), oid))
+                except Exception:
+                    logger.exception(
+                        '{}> Error while processing record'.format(self.name))
             yield result_batch
 
     def apply_batch(self, ids):
@@ -180,13 +194,19 @@ def multi_process(dsn, processes_count=None, queue_size=5, batch_size=100000):
     for worker_index in range(processes_count):
         if not ids_stack:
             logger.info('master> We ran out of things to do')
-            break
+            try:
+                next(ids_batch)
+            except StopIteration:
+                break
+            else:
+                raise AssertionError('Should not happen')
         worker_name = 'worker-{}'.format(worker_index + 1)
         incoming = multiprocessing.Queue(queue_size + 2)
         outgoing = multiprocessing.Queue(queue_size + 2)
         incoming.put(random.randint(1, MAX_DELAY))
         for queue_index in range(queue_size):
             if not ids_stack:
+                incoming.put(None)
                 break
             incoming.put(ids_stack.pop())
         logger.info('master> Starting worker {}'.format(worker_name))
