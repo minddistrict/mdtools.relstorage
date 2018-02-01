@@ -1,3 +1,5 @@
+import argparse
+import random
 import time
 import io
 import contextlib
@@ -10,6 +12,8 @@ import zodbupdate.serialize
 import zodbupdate.main
 
 logger = zodbupdate.main.setup_logger()
+
+MAX_DELAY = 20
 
 
 # Updater logic
@@ -126,14 +130,19 @@ def worker_process(incoming, outgoing, empty, dsn, name):
     def ids_batch_from_master():
         while True:
             try:
-                ids = incoming.get(block=True, timeout=1)
+                order = incoming.get(block=True, timeout=1)
             except Queue.Empty:
                 logger.info('{}> I am starving'.format(name))
                 wake_up_master()
                 continue
-            if ids is None:
+            if order is None:
                 break
-            yield ids
+            if isinstance(order, int):
+                logger.info('{}> Waiting {} seconds'.format(name, order))
+                time.sleep(order)
+                continue
+            if isinstance(order, list):
+                yield order
 
     updater = Updater(dsn, name)
     try:
@@ -152,6 +161,7 @@ def multi_process(dsn, processes_count=None, queue_size=5, batch_size=100000):
     empty = multiprocessing.Condition()
     updater = Updater(dsn, 'master')
     fetch_factor = processes_count * queue_size * 2
+    logger.info('master> Fetch factor is {}'.format(fetch_factor))
 
     def split_ids_batch(batch):
         if batch:
@@ -161,6 +171,7 @@ def multi_process(dsn, processes_count=None, queue_size=5, batch_size=100000):
                     break
                 yield part
 
+    batch_completed = 0
     ids_done = False
     ids_batch = updater.ids_batch_from_database(batch_size * fetch_factor)
     ids_stack = list(split_ids_batch(next(ids_batch)))
@@ -171,8 +182,9 @@ def multi_process(dsn, processes_count=None, queue_size=5, batch_size=100000):
             logger.info('master> We ran out of things to do')
             break
         worker_name = 'worker-{}'.format(worker_index + 1)
-        incoming = multiprocessing.Queue(queue_size + 1)
-        outgoing = multiprocessing.Queue(queue_size + 1)
+        incoming = multiprocessing.Queue(queue_size + 2)
+        outgoing = multiprocessing.Queue(queue_size + 2)
+        incoming.put(random.randint(1, MAX_DELAY))
         for queue_index in range(queue_size):
             if not ids_stack:
                 break
@@ -183,8 +195,6 @@ def multi_process(dsn, processes_count=None, queue_size=5, batch_size=100000):
             args=(incoming, outgoing, empty, dsn, worker_name))
         worker.start()
         workers[worker_name] = (worker, incoming, outgoing)
-        # Sleep to have workers out of sync
-        time.sleep(5)
     if not ids_stack:
         # Stack is empty, we did not have enough for the first round,
         # but we should have had more than needed so it means we are
@@ -206,7 +216,8 @@ def multi_process(dsn, processes_count=None, queue_size=5, batch_size=100000):
                 ids_stack.extend(split_ids_batch(ids))
             ids = None
         else:
-            logger.info('master> Sleeping #{}'.format(cycle))
+            logger.info('master> Sleeping ({} batch completed) #{}'.format(
+                batch_completed, cycle))
             empty.acquire()
             empty.wait(60)
             empty.release()
@@ -214,7 +225,7 @@ def multi_process(dsn, processes_count=None, queue_size=5, batch_size=100000):
 
         for worker_name, worker_info in list(workers.items()):
             worker, incoming, outgoing = worker_info
-            ids_completed = 0
+            worker_batch_completed = 0
             worker_done = False
             while True:
                 try:
@@ -222,18 +233,21 @@ def multi_process(dsn, processes_count=None, queue_size=5, batch_size=100000):
                 except Queue.Empty:
                     break
                 if worker_result is True:
-                    ids_completed += 1
+                    worker_batch_completed += 1
                 if worker_result is None:
                     worker_done = True
                     break
+            batch_completed += worker_batch_completed
             if worker_done:
                 logger.info('master> Worker {} is done #{}'.format(
                     worker_name, cycle))
                 worker.join()
                 del workers[worker_name]
                 continue
-            if ids_completed:
-                for queue_index in range(ids_completed):
+            if worker_batch_completed:
+                if worker_batch_completed == queue_size:
+                    incoming.put(random.randint(1, MAX_DELAY))
+                for queue_index in range(worker_batch_completed):
                     if not ids_stack:
                         incoming.put(None)
                         break
@@ -241,6 +255,18 @@ def multi_process(dsn, processes_count=None, queue_size=5, batch_size=100000):
 
 
 def main():
-    dsn = "dbname='maas_dev'"
+    parser = argparse.ArgumentParser(description="ZODB update on relstorage")
+    parser.add_argument(
+        '--queue-size', dest='queue_size', type=int, default=5)
+    parser.add_argument(
+        '--batch-size', dest='batch_size', type=int, default=100000)
+    parser.add_argument(
+        'dsn',
+        help="DSN example: dbname='maas_dev'")
+
+    args = parser.parse_args()
     # single_process(dsn)
-    multi_process(dsn)
+    multi_process(
+        args.dsn,
+        queue_size=args.queue_size,
+        batch_size=args.batch_size)
