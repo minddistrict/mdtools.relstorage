@@ -34,9 +34,9 @@ def encode_record(output_file):
     return base64.encodestring(output_file.getvalue())
 
 
-class Updater(object):
+class Connection(object):
 
-    def __init__(self, dsn, name='default'):
+    def __init__(self, dsn, name):
         self.dsn = dsn
         self.name = name
 
@@ -44,39 +44,76 @@ class Updater(object):
     def new_connection(self):
         connection = psycopg2.extensions.connection(self.dsn)
         cursor = connection.cursor()
-        cursor.arraysize = 64
         yield cursor
         connection.commit()
         connection.close()
 
-    def ids_batch_from_database(self, batch_size=100000):
+
+class Ids(Connection):
+
+    def __init__(self, dsn, batch_size, fetch_factor):
+        super(Ids, self).__init__(dsn, 'master')
+        self.fetch_factor = fetch_factor
+        self.batch_size = batch_size
+        self.total = 0
+        self.fetched = 0
+
+    def split(self, batch):
+        if batch:
+            len_batch = len(batch)
+            len_parts = 0
+            for f in range(self.fetch_factor):
+                part = batch[self.batch_size * f:self.batch_size * (f + 1)]
+                len_parts += len(part)
+                if not part:
+                    break
+                yield part
+            assert len_parts == len_batch
+
+    def fetch(self):
         # Reading ids is expensive because of the sort, so we do
         # larger requests here.
-        offset = 0
-        count = 1
-        logger.info('{}> Prepare ids'.format(self.name))
+        fetch_offset = 0
+        fetch_count = 1
+        fetch_size = self.batch_size * self.fetch_factor
+        logger.info('{}> Fetch factor is {}, batch size is {}'.format(
+            self.name, self.fetch_factor, self.batch_size))
         with self.new_connection() as cursor:
+            cursor.execute(
+                "DROP MATERIALIZED VIEW IF EXISTS sorted_zoid")
             cursor.execute(
                 "CREATE MATERIALIZED VIEW sorted_zoid AS "
                 "SELECT zoid FROM object_state ORDER BY zoid;")
+            self.total = int(cursor.statusmessage.split(' ')[1])
+            logger.info('{}> Found {} objects, estimated {} batch'.format(
+                self.name, self.total, (self.total // self.batch_size) + 1))
 
         while True:
-            logger.info('{}> Fetch ids #{}'.format(self.name, count))
+            logger.info('{}> Fetch ids #{}'.format(self.name, fetch_count))
             with self.new_connection() as cursor:
                 cursor.execute(
                     "SELECT * FROM sorted_zoid LIMIT %s OFFSET %s",
-                    (batch_size, offset))
-                oids = [result[0] for result in cursor.fetchall()]
-            if not oids:
+                    (fetch_size, fetch_offset))
+                ids = []
+                results = cursor.fetchmany(5000)
+                while results:
+                    ids.extend(result[0] for result in results)
+                    results = cursor.fetchmany(5000)
+            self.fetched += len(ids)
+            if not ids:
                 break
-            offset += batch_size
-            count += 1
-            yield oids
+            fetch_offset += fetch_size
+            fetch_count += 1
+            yield list(self.split(ids))
 
-        logger.info('{}> Cleanup ids'.format(self.name))
+        assert self.total == self.fetched
+        logger.info('{}> Cleanup ids #{}'.format(self.name, fetch_count))
         with self.new_connection() as cursor:
             cursor.execute(
                 "DROP MATERIALIZED VIEW sorted_zoid")
+
+
+class Worker(Connection):
 
     def read_batch(self, ids_batch):
         for index, oids in enumerate(ids_batch):
@@ -127,13 +164,6 @@ class Updater(object):
 # End of updater logic
 
 
-def single_process(dsn, batch_size=200000):
-    updater = Updater(dsn)
-    ids_batch = updater.ids_batch_from_database(batch_size)
-    for batch in updater.apply_batch(ids_batch):
-        pass
-
-
 def worker_process(incoming, outgoing, empty, dsn, name):
 
     def wake_up_master():
@@ -141,7 +171,7 @@ def worker_process(incoming, outgoing, empty, dsn, name):
         empty.notify()
         empty.release()
 
-    def ids_batch_from_master():
+    def ids_from_master():
         while True:
             try:
                 order = incoming.get(block=True, timeout=1)
@@ -158,45 +188,35 @@ def worker_process(incoming, outgoing, empty, dsn, name):
             if isinstance(order, list):
                 yield order
 
-    updater = Updater(dsn, name)
+    worker = Worker(dsn, name)
     try:
-        for batch in updater.apply_batch(ids_batch_from_master()):
-            outgoing.put(True)
+        for batch in worker.apply_batch(ids_from_master()):
+            outgoing.put(len(batch))
     finally:
         outgoing.put(None)
         logger.info('{}> I am done'.format(name))
         wake_up_master()
 
 
-def multi_process(dsn, processes_count=None, queue_size=5, batch_size=100000):
-    if processes_count is None:
-        processes_count = multiprocessing.cpu_count()
+def multi_process(dsn, queue_size=5, batch_size=100000):
+    processes_count = multiprocessing.cpu_count()
     workers = {}
     empty = multiprocessing.Condition()
-    updater = Updater(dsn, 'master')
     fetch_factor = processes_count * queue_size * 2
-    logger.info('master> Fetch factor is {}'.format(fetch_factor))
-
-    def split_ids_batch(batch):
-        if batch:
-            for factor in range(fetch_factor):
-                part = batch[batch_size * factor:batch_size * (factor + 1)]
-                if not part:
-                    break
-                yield part
-
-    batch_completed = 0
-    ids_done = False
-    ids_batch = updater.ids_batch_from_database(batch_size * fetch_factor)
-    ids_stack = list(split_ids_batch(next(ids_batch)))
+    ids = Ids(dsn, batch_size=batch_size, fetch_factor=fetch_factor)
+    ids_consumed = False
+    ids_fetch = ids.fetch()
+    ids_stack = next(ids_fetch)
+    ids_completed = 0
 
     # Create workers.
     for worker_index in range(processes_count):
         if not ids_stack:
             logger.info('master> We ran out of things to do')
             try:
-                next(ids_batch)
+                next(ids_fetch)
             except StopIteration:
+                ids_consumed = True
                 break
             else:
                 raise AssertionError('Should not happen')
@@ -215,29 +235,21 @@ def multi_process(dsn, processes_count=None, queue_size=5, batch_size=100000):
             args=(incoming, outgoing, empty, dsn, worker_name))
         worker.start()
         workers[worker_name] = (worker, incoming, outgoing)
-    if not ids_stack:
-        # Stack is empty, we did not have enough for the first round,
-        # but we should have had more than needed so it means we are
-        # out of ids.
-        ids_done = True
 
     # Feed work.
     cycle = 0
     while len(workers):
         cycle += 1
-        if not ids_done and len(ids_stack) <= (fetch_factor / 2):
+        if not ids_consumed and len(ids_stack) <= (fetch_factor / 2):
             # Fetch new ids to work on while workers are doing something else.
             try:
-                ids = next(ids_batch)
+                ids_stack.extend(next(ids_fetch))
             except StopIteration:
                 logger.info('master> Got all ids #{}'.format(cycle))
-                ids_done = True
-            else:
-                ids_stack.extend(split_ids_batch(ids))
-            ids = None
+                ids_consumed = True
         else:
-            logger.info('master> Sleeping ({} batch completed) #{}'.format(
-                batch_completed, cycle))
+            logger.info('master> Sleeping ({}%) #{}'.format(
+                (ids_completed * 100 / ids.total), cycle))
             empty.acquire()
             empty.wait(60)
             empty.release()
@@ -252,12 +264,11 @@ def multi_process(dsn, processes_count=None, queue_size=5, batch_size=100000):
                     worker_result = outgoing.get_nowait()
                 except Queue.Empty:
                     break
-                if worker_result is True:
-                    worker_batch_completed += 1
                 if worker_result is None:
                     worker_done = True
                     break
-            batch_completed += worker_batch_completed
+                worker_batch_completed += 1
+                ids_completed += worker_result
             if worker_done:
                 logger.info('master> Worker {} is done #{}'.format(
                     worker_name, cycle))
@@ -273,6 +284,12 @@ def multi_process(dsn, processes_count=None, queue_size=5, batch_size=100000):
                         break
                     incoming.put(ids_stack.pop())
 
+    if ids_completed == ids.total:
+        logger.info('master> All done')
+    else:
+        logger.error('master> Missed {} objects'.format(
+            ids_completed - ids.total))
+
 
 def main():
     parser = argparse.ArgumentParser(description="ZODB update on relstorage")
@@ -285,7 +302,6 @@ def main():
         help="DSN example: dbname='maas_dev'")
 
     args = parser.parse_args()
-    # single_process(dsn)
     multi_process(
         args.dsn,
         queue_size=args.queue_size,
