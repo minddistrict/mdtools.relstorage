@@ -1,11 +1,14 @@
-
+import logging
 import sqlite3
 
-from ZODB.utils import u64
-from ZODB.serialize import referencesf
-from zope.interface import implements
+import ZODB.utils
+import ZODB.serialize
+import zope.interface
+import mdtools.relstorage.interfaces
 
-from mdtools.relstorage.interfaces import IReferencesDatabase
+COMMIT_EVERY = 50000
+
+logger = logging.getLogger('mdtools.relstorage.reference')
 
 
 def connect(callback):
@@ -14,7 +17,7 @@ def connect(callback):
     def wrapper(self, *args, **kwargs):
         try:
             connection = sqlite3.connect(self.db_name)
-        except:
+        except Exception:
             raise ValueError(
                 'impossible to open references database {}.'.format(
                     self.db_name))
@@ -27,29 +30,46 @@ def connect(callback):
     return wrapper
 
 
-class ReferencesDatabase(object):
-    implements(IReferencesDatabase)
+@zope.interface.implementer(mdtools.relstorage.interfaces.IDatabase)
+class Database(object):
 
     def __init__(self, db_name):
         self.db_name = db_name
 
     @connect
-    def analyzeRecords(self, connection, records):
+    def analyze_records(self, connection, records):
+        counter = 0
         cursor = connection.cursor()
-        for record in records:
-            current_oid = u64(record.oid)
-            referred_oids = set(map(u64, referencesf(record.data)))
+        for data, current_oid in records:
+            referred_oids = {
+                ZODB.utils.u64(reference)
+                for reference in ZODB.serialize.referencesf(data)}
 
             for referred_oid in referred_oids or [-1]:
+                counter += 1
                 cursor.execute("""
 INSERT INTO links (source_oid, target_oid) VALUES
 (?, ?)
             """, (current_oid, referred_oid))
-        connection.commit()
+            if counter > COMMIT_EVERY:
+                connection.commit()
+                counter = 0
+        if counter:
+            connection.commit()
+        logger.info('Optimizing reference database.')
+        cursor.execute("""
+PRAGMA optimize;
+""")
 
     @connect
-    def createDatabase(self, connection):
+    def create_database(self, connection):
         cursor = connection.cursor()
+        cursor.execute("""
+PRAGMA main.locking_mode=EXCLUSIVE;
+""")
+        cursor.execute("""
+PRAGMA journal_mode=WAL;
+""")
         cursor.execute("""
 CREATE TABLE IF NOT EXISTS links
 (source_oid BIGINT, target_oid BIGINT)
@@ -63,7 +83,7 @@ CREATE INDEX IF NOT EXISTS target_oid_index ON links (target_oid)
         connection.commit()
 
     @connect
-    def checkDatabase(self, connection):
+    def check_database(self, connection):
         cursor = connection.cursor()
         try:
             result = cursor.execute("SELECT count(*) FROM links")
@@ -73,7 +93,7 @@ CREATE INDEX IF NOT EXISTS target_oid_index ON links (target_oid)
         return True
 
     @connect
-    def getUnUsedOIDs(self, connection):
+    def get_unused_oids(self, connection):
         oids = set([])
         cursor = connection.cursor()
         result = cursor.execute("""
@@ -95,7 +115,7 @@ EXCEPT SELECT DISTINCT source_oid FROM links_to_root
         return oids
 
     @connect
-    def linkedToOID(self, connection, oid, depth):
+    def get_linked_to_oid(self, connection, oid, depth):
         cursor = connection.cursor()
         result = cursor.execute("""
 WITH RECURSIVE linked_to_oid (source_oid, depth) AS (
@@ -117,8 +137,8 @@ SELECT DISTINCT source_oid, depth FROM linked_to_oid WHERE depth = ?
         return linked
 
     @connect
-    def getMissingOIDs(self, connection):
-        oids = set([])
+    def get_missing_oids(self, connection):
+        oids = set()
         cursor = connection.cursor()
         result = cursor.execute("""
 SELECT a.target_oid FROM links AS a LEFT OUTER JOIN links AS b
@@ -130,8 +150,8 @@ WHERE a.target_oid > -1 AND b.source_oid IS NULL
         return oids
 
     @connect
-    def getForwardReferences(self, connection, oid):
-        oids = set([])
+    def get_forward_references(self, connection, oid):
+        oids = set()
         cursor = connection.cursor()
         result = cursor.execute("""
 SELECT target_oid FROM links
@@ -142,7 +162,7 @@ WHERE source_oid = ? AND target_oid > -1
         return oids
 
     @connect
-    def getBackwardReferences(self, connection, oid):
+    def get_backward_references(self, connection, oid):
         oids = set([])
         cursor = connection.cursor()
         result = cursor.execute("""

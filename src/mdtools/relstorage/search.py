@@ -1,55 +1,56 @@
-import cPickle
+import argparse
+import base64
 import io
 import logging
-import optparse
 import sys
-import types
 
 import ZODB.broken
-from mdtools.relstorage.util import open_database
+import zodbupdate.serialize
+import zodbupdate.utils
+import mdtools.relstorage.log
+import mdtools.relstorage.zodb
+import mdtools.relstorage.database
 
 
-class BrokenRecord(ValueError):
-    pass
-
-
-def is_broken(symb):
-    """Return True if the given symbol is broken."""
-    return (isinstance(symb, types.TypeType) and
-            ZODB.broken.Broken in symb.__mro__)
+logger = logging.getLogger('mdtools.relstorage.search')
 
 
 class Search(object):
 
-    def __init__(self, classes=[], report=False):
+    def __init__(self, classes=[], search_data=False):
         self.classes = classes
-        self.report = report
+        self.search_data = search_data
 
-    def validate(self, cls_info, cls):
+    def _validate(self, cls_info, cls):
         fullname = '.'.join(cls_info)
-        if is_broken(cls):
-            print 'Broken class {}'.format(fullname)
-            if self.report:
-                raise BrokenRecord()
+        if zodbupdate.utils.is_broken(cls):
+            logger.error(
+                'Broken class {} in record "0x{:x}"'.format(
+                    fullname, self._current_oid))
         if self.classes and fullname in self.classes:
-            print 'Instance of {} found'.format(fullname)
+            logger.info(
+                'Instance of {} found  in record "0x{:x}"'.format(
+                    fullname, self._current_oid))
 
-    def read_class_meta(self, class_meta):
+    def _read_class_meta(self, class_meta):
         if isinstance(class_meta, tuple):
             symb, _ = class_meta
             if isinstance(symb, tuple):
-                self.validate(symb, ZODB.broken.find_global(*symb))
+                self._validate(symb, ZODB.broken.find_global(
+                    *symb, Broken=zodbupdate.serialize.ZODBBroken))
             else:
                 symb_info = (getattr(symb, '__module__', None),
                              getattr(symb, '__name__', None))
-                self.validate(symb_info, symb)
+                self._validate(symb_info, symb)
 
-    def find_global(self, *cls_info):
-        cls = ZODB.broken.find_global(*cls_info)
-        self.validate(cls_info, cls)
+    def _find_global(self, *cls_info):
+        cls = ZODB.broken.find_global(
+            *cls_info,
+            Broken=zodbupdate.serialize.ZODBBroken)
+        self._validate(cls_info, cls)
         return cls
 
-    def persistent_load(self, reference):
+    def _persistent_load(self, reference):
         cls_info = None
         if isinstance(reference, tuple):
             oid, cls_info = reference
@@ -58,51 +59,105 @@ class Search(object):
             if mode == 'm':
                 db, oid, cls_info = information
         if isinstance(cls_info, tuple):
-            self.find_global(cls_info)
+            self._find_global(cls_info)
+
+    def search(self, data, oid):
+        self._current_oid = oid
+        unpickler = zodbupdate.utils.Unpickler(
+            io.BytesIO(data),
+            self._persistent_load,
+            self._find_global)
+        self._read_class_meta(unpickler.load())
+        if self.search_data:
+            unpickler.load()
 
 
-def main(args=None):
-    logging.basicConfig(format="%(message)s")
+class Searcher(Search, mdtools.relstorage.database.Worker):
 
+    def __init__(self, worker=None, **kwargs):
+        Search.__init__(self, **kwargs)
+        mdtools.relstorage.database.Worker.__init__(self, worker=worker)
+
+    def process(self, ids):
+        done = 0
+        batch = self.read_batch(ids)
+        logger.debug('{}> Searching #{}'.format(
+            self.logname, self.iteration))
+        for data, oid in batch:
+            try:
+                self.search(base64.decodestring(data), oid)
+            except Exception:
+                logger.exception(
+                    '{}> Error while searching record "0x{:x}":'.format(
+                        self.logname, oid))
+            else:
+                done += 1
+        return done
+
+
+def zodb_main(args=None):
     if args is None:
         args = sys.argv[1:]
 
-    parser = optparse.OptionParser(
-        'usage: %prog [options] [--db DATA.FS | --zeo ADDRESS | --config FILE]',
-        prog='zodbsearch',
-        description=('Search if one or multiple Python class are used in '
-                     'a database.'))
-    parser.add_option('--config', metavar='FILE',
-                      help='use a ZConfig file to specify database')
-    parser.add_option('--zeo', metavar='ADDRESS',
-                      help='connect to ZEO server instead'
-                      ' (host:port or socket name)')
-    parser.add_option('--storage', metavar='NAME',
-                      help='connect to given ZEO storage')
-    parser.add_option('--db', metavar='DATA.FS',
-                      help='use given Data.fs file')
-    parser.add_option('--data', action="store_true",
-                      dest="data", default=False,
-                      help='check inside persisted data too')
-    parser.add_option('--report', action="store_true",
-                      dest="report", default=False,
-                      help='report record OID in case of broken class')
-    opts, args = parser.parse_args(args)
+    parser = argparse.ArgumentParser(
+        description='Search if Python classes are used in a database.')
+    parser.add_argument(
+        '--config', metavar='FILE',
+        help='use a ZConfig file to specify database')
+    parser.add_argument(
+        '--zeo', metavar='ADDRESS',
+        help='connect to ZEO server instead (host:port or socket name)')
+    parser.add_argument(
+        '--storage', metavar='NAME', help='connect to given ZEO storage')
+    parser.add_argument(
+        '--db', metavar='DATA.FS', help='use given Data.fs file')
+    parser.add_argument(
+        '--data', action="store_true", dest="search_data", default=False,
+        help='check inside persisted data too')
+    parser.add_argument(
+        "--quiet", action="store_true", help="suppress non-error messages")
+    parser.add_argument(
+        "--verbose", action="store_true", help="more verbose output")
+    parser.add_argument('classes', metavar='classes', nargs='*')
+    args = parser.parse_args(args)
+
+    mdtools.relstorage.log.setup(args)
     try:
-        db = open_database(opts)
+        db = mdtools.relstorage.zodb.open(args)
     except ValueError as error:
         parser.error(error.args[0])
 
-    search = Search(args, report=opts.report)
+    search = Search(
+        classes=args.classes,
+        search_data=args.search_data)
     for transaction in db._storage.iterator():
         for record in transaction:
-            try:
-                unpickler = cPickle.Unpickler(io.BytesIO(record.data))
-                unpickler.persistent_load = search.persistent_load
-                unpickler.find_global = search.find_global
-                search.read_class_meta(unpickler.load())
-                if opts.data:
-                    unpickler.load()
-            except BrokenRecord:
-                print 'ZODB record "0x{:x}" contains broken classes.'.format(
-                    ZODB.utils.u64(record.oid))
+            search.search(record.data, ZODB.utils.u64(record.oid))
+
+
+def relstorage_main():
+    parser = argparse.ArgumentParser(description="ZODB search on relstorage")
+    parser.add_argument(
+        '--queue-size', dest='queue_size', type=int, default=5)
+    parser.add_argument(
+        '--batch-size', dest='batch_size', type=int, default=100000)
+    parser.add_argument(
+        '--data', action="store_true", dest="search_data", default=False,
+        help='check inside persisted data too')
+    parser.add_argument(
+        "--quiet", action="store_true", help="suppress non-error messages")
+    parser.add_argument(
+        "--verbose", action="store_true", help="more verbose output")
+    parser.add_argument(
+        'dsn', help="DSN example: dbname='maas_dev'")
+    parser.add_argument('classes', metavar='classes', nargs='*')
+
+    args = parser.parse_args()
+    mdtools.relstorage.log.setup(args)
+    mdtools.relstorage.database.multi_process(
+        Searcher,
+        args.dsn,
+        queue_size=args.queue_size,
+        batch_size=args.batch_size,
+        classes=args.classes,
+        search_data=args.search_data)
