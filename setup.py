@@ -24,6 +24,7 @@ setup(
         ],
     entry_points={
         'console_scripts': [
+            'relcheck = mdtools.relstorage.check:relstorage_main',
             'relsearch = mdtools.relstorage.search:relstorage_main',
             'relupdate = mdtools.relstorage.update:relstorage_main',
             'sqlpack = mdtools.relstorage.sqlpack:main',

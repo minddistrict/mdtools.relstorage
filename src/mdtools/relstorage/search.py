@@ -155,9 +155,10 @@ def relstorage_main():
     args = parser.parse_args()
     mdtools.relstorage.log.setup(args)
     mdtools.relstorage.database.multi_process(
-        Searcher,
-        args.dsn,
+        dsn=args.dsn,
+        worker_task=Searcher,
+        worker_options={
+            'classes': args.classes,
+            'search_data': args.search_data},
         queue_size=args.queue_size,
-        batch_size=args.batch_size,
-        classes=args.classes,
-        search_data=args.search_data)
+        batch_size=args.batch_size)

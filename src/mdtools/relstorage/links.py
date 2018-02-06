@@ -6,6 +6,10 @@ import mdtools.relstorage.zodb
 import mdtools.relstorage.reference
 
 
+def oid(oid):
+    return int(oid, 16)
+
+
 def main(args=None):
     if args is None:
         args = sys.argv[1:]
@@ -28,13 +32,13 @@ def main(args=None):
         '--db', metavar='DATA.FS',
         help='use given Data.fs file')
     parser.add_argument(
-        '--depth', metavar='DEPTH', dest='depth', type='int',
+        '--depth', metavar='DEPTH', dest='depth', type=int,
         help='depth to explore', default=1)
     parser.add_argument(
         '--rw', action='store_false', dest='readonly', default=True,
         help='open the database read-write (default: read-only)')
     parser.add_argument(
-        '--oid', metavar='OID', dest='oid', type='int',
+        '--oid', metavar='OID', dest='oid', type=oid,
         help='oid')
     args = parser.parse_args(args)
     try:
@@ -48,8 +52,8 @@ def main(args=None):
     connection = db.open()
     results = references.get_linked_to_oid(args.oid, args.depth)
     print('Found {} results'.format(len(results)))
-    for oid, depth in results:
+    for found_id, depth in results:
         print('{}: 0x{:x}: {}'.format(
             depth,
-            oid,
-            connection.get(ZODB.utils.p64(oid))))
+            found_id,
+            connection.get(ZODB.utils.p64(found_id))))

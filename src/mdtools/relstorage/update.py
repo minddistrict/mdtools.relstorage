@@ -74,7 +74,7 @@ def relstorage_main():
     args = parser.parse_args()
     mdtools.relstorage.log.setup(args)
     mdtools.relstorage.database.multi_process(
-        Updater,
-        args.dsn,
+        dsn=args.dsn,
+        worker_task=Updater,
         queue_size=args.queue_size,
         batch_size=args.batch_size)

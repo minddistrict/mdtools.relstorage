@@ -3,13 +3,10 @@ import logging
 import multiprocessing
 import psycopg2
 import psycopg2.extras
-import random
-import time
 import Queue
 
 logger = logging.getLogger('mdtools.relstorage.database')
 
-MAX_DELAY = 20
 FETCH_MANY = 10000
 
 
@@ -74,10 +71,12 @@ class Worker(Connection, multiprocessing.Process):
     iteration = 0
 
     def __init__(self, worker):
-        dsn, incoming, outgoing, empty = worker
-        self._empty = empty
+        dsn, incoming, outgoing, control, lock, condition = worker
+        self._condition = condition
         self._incoming = incoming
         self._outgoing = outgoing
+        self._control = control
+        self._lock = lock
         Connection.__init__(self, dsn)
         multiprocessing.Process.__init__(self)
 
@@ -121,15 +120,21 @@ class Worker(Connection, multiprocessing.Process):
                 batch,
                 page_size=10)
 
-    def process(self, ids):
+    def send_to_consumer(self, batch):
+        assert self._lock is not None and self._outgoing is not None
+        self._lock.acquire()
+        self._outgoing.put(batch)
+        self._lock.release()
+
+    def process(self, job):
         raise NotImplementedError()
 
     def _wake_up_master(self):
-        self._empty.acquire()
-        self._empty.notify()
-        self._empty.release()
+        self._condition.acquire()
+        self._condition.notify()
+        self._condition.release()
 
-    def _ids_from_master(self):
+    def _job_from_master(self):
         while True:
             try:
                 order = self._incoming.get(block=True, timeout=1)
@@ -139,23 +144,64 @@ class Worker(Connection, multiprocessing.Process):
                 continue
             if order is None:
                 break
-            if isinstance(order, int):
-                logger.debug('{}> Waiting {} seconds'.format(
-                    self.logname, order))
-                time.sleep(order)
-                continue
             if isinstance(order, list):
                 yield order
 
     def run(self):
         try:
-            for ids in self._ids_from_master():
+            for job in self._job_from_master():
                 self.iteration += 1
-                result = self.process(ids)
+                result = self.process(job)
                 assert isinstance(result, int)
-                self._outgoing.put(result)
+                self._control.put(result)
         finally:
-            self._outgoing.put(None)
+            self._control.put(None)
+            logger.debug('{}> I am done'.format(self.logname))
+            self._wake_up_master()
+
+
+class Consumer(multiprocessing.Process):
+    iteration = 0
+
+    def __init__(self, worker):
+        outgoing, control, condition = worker
+        self._outgoing = outgoing
+        self._condition = condition
+        self._control = control
+        multiprocessing.Process.__init__(self)
+
+    @property
+    def logname(self):
+        return self.name.lower()
+
+    def process(self, job):
+        raise NotImplementedError()
+
+    def _wake_up_master(self):
+        self._condition.acquire()
+        self._condition.notify()
+        self._condition.release()
+
+    def _job_from_workers(self):
+        while True:
+            try:
+                order = self._outgoing.get(block=True)
+            except Queue.Empty:
+                continue
+            if order is None:
+                break
+            if isinstance(order, list):
+                yield order
+
+    def run(self):
+        try:
+            for job in self._job_from_workers():
+                self.iteration += 1
+                result = self.process(job)
+                assert isinstance(result, int)
+                self._control.put(result)
+        finally:
+            self._control.put(None)
             logger.debug('{}> I am done'.format(self.logname))
             self._wake_up_master()
 
@@ -163,14 +209,38 @@ class Worker(Connection, multiprocessing.Process):
 # End of worker logic
 
 
-def multi_process(task, dsn, queue_size=5, batch_size=100000, **options):
-    processes_count = multiprocessing.cpu_count()
-    workers = {}
-    empty = multiprocessing.Condition()
+def multi_process(
+        dsn,
+        worker_task,
+        worker_options=None,
+        consumer_task=None,
+        consumer_options=None,
+        queue_size=5,
+        batch_size=100000):
     ids = Ids(dsn, batch_size=batch_size)
     ids_consumed = False
-    ids_completed = 0
     ids_fetch = ids.fetch()
+
+    processes_count = multiprocessing.cpu_count()
+    workers = {}
+    worker_ids_completed = 0
+    consumer_ids_completed = 0
+    master_condition = multiprocessing.Condition()
+    if consumer_task is not None:
+        outgoing_lock = multiprocessing.Lock()
+        outgoing = multiprocessing.Queue(queue_size + 2)
+        consumer_control = multiprocessing.Queue(
+            queue_size * processes_count + 2)
+        consumer = consumer_task(
+            worker=(outgoing, consumer_control, master_condition),
+            **(consumer_options or {}))
+        logger.info('master> Starting consumer "{}"'.format(consumer.logname))
+        consumer.start()
+    else:
+        outgoing_lock = None
+        outgoing = None
+        consumer_control = None
+        consumer = None
 
     # Create workers.
     for worker_index in range(processes_count):
@@ -178,8 +248,7 @@ def multi_process(task, dsn, queue_size=5, batch_size=100000, **options):
             logger.debug('master> We ran out of things to do')
             break
         incoming = multiprocessing.Queue(queue_size + 2)
-        outgoing = multiprocessing.Queue(queue_size + 2)
-        incoming.put(random.randint(1, MAX_DELAY))
+        control = multiprocessing.Queue(queue_size + 2)
         for queue_index in range(queue_size):
             try:
                 job = next(ids_fetch)
@@ -189,38 +258,43 @@ def multi_process(task, dsn, queue_size=5, batch_size=100000, **options):
                 break
             else:
                 incoming.put(job)
-        worker = task(
-            worker=(dsn, incoming, outgoing, empty),
-            **options)
+        worker = worker_task(
+            worker=(
+                dsn, incoming, outgoing, control,
+                outgoing_lock, master_condition),
+            **(worker_options or {}))
         logger.info('master> Starting worker "{}"'.format(worker.logname))
         worker.start()
-        workers[worker.logname] = (worker, incoming, outgoing)
+        workers[worker.logname] = (worker, incoming, control)
 
     # Feed work.
     cycle = 0
-    while len(workers):
+    while len(workers) or consumer is not None:
         cycle += 1
-        logger.info('master> Progress ({:.2f}% done) #{}'.format(
-            (ids_completed * 100.0 / ids.total), cycle))
-        empty.acquire()
-        empty.wait(60)
-        empty.release()
+        logger.info(
+            'master> Progress ({:.2f}% worked, {:.2f}% consumed) #{}'.format(
+                (worker_ids_completed * 100.0 / ids.total),
+                (consumer_ids_completed * 100.0 / ids.total),
+                cycle))
+        master_condition.acquire()
+        master_condition.wait(30)
+        master_condition.release()
         logger.debug('master> Waking up #{}'.format(cycle))
 
         for worker_name, worker_info in list(workers.items()):
-            worker, incoming, outgoing = worker_info
+            worker, incoming, control = worker_info
             worker_batch_completed = 0
             worker_done = False
             while True:
                 try:
-                    worker_result = outgoing.get_nowait()
+                    worker_status = control.get_nowait()
                 except Queue.Empty:
                     break
-                if worker_result is None:
+                if worker_status is None:
                     worker_done = True
                     break
                 worker_batch_completed += 1
-                ids_completed += worker_result
+                worker_ids_completed += worker_status
             if worker_done:
                 logger.info('master> Worker "{}" is done #{}'.format(
                     worker_name, cycle))
@@ -231,8 +305,6 @@ def multi_process(task, dsn, queue_size=5, batch_size=100000, **options):
                 if ids_consumed:
                     incoming.put(None)
                 else:
-                    if worker_batch_completed == queue_size:
-                        incoming.put(random.randint(1, MAX_DELAY))
                     for queue_index in range(worker_batch_completed):
                         try:
                             job = next(ids_fetch)
@@ -243,8 +315,23 @@ def multi_process(task, dsn, queue_size=5, batch_size=100000, **options):
                         else:
                             incoming.put(job)
 
-    if ids_completed == ids.total:
+        if consumer is not None:
+            if not len(workers):
+                outgoing.put(None)
+            while True:
+                try:
+                    consumer_status = consumer_control.get_nowait()
+                except Queue.Empty:
+                    break
+                if consumer_status is None:
+                    logger.info('master> Consumer is done #{}'.format(cycle))
+                    consumer.join()
+                    consumer = None
+                    break
+                consumer_ids_completed += consumer_status
+
+    if worker_ids_completed == ids.total:
         logger.info('master> All done')
     else:
         logger.error('master> Missed {} objects'.format(
-            ids.total - ids_completed))
+            ids.total - worker_ids_completed))
