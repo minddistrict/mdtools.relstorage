@@ -270,29 +270,25 @@ def multi_process(
 
     # Feed work.
     cycle = 0
-    cycle_activity = True
     while len(workers) or consumer is not None:
         cycle += 1
-        if cycle % 10 == 0:
-            if consumer is not None:
-                logger.info(
-                    'master> Progress '
-                    '({:.2f}% worked, {:.2f}% consumed) #{}'.format(
-                        (worker_ids_completed * 100.0 / ids.total),
-                        (consumer_ids_completed * 100.0 / ids.total),
-                        cycle))
-            else:
-                logger.info(
-                    'master> Progress ({:.2f}% worked) #{}'.format(
-                        (worker_ids_completed * 100.0 / ids.total),
-                        cycle))
-        if not cycle_activity:
-            logger.debug('master> Sleeping #{}'.format(cycle))
-            master_condition.acquire()
-            master_condition.wait(30)
-            master_condition.release()
-            logger.debug('master> Waking up #{}'.format(cycle))
-            cycle_activity = False
+        if consumer is not None:
+            logger.info(
+                'master> Progress '
+                '({:.2f}% worked, {:.2f}% consumed) #{}'.format(
+                    (worker_ids_completed * 100.0 / ids.total),
+                    (consumer_ids_completed * 100.0 / ids.total),
+                    cycle))
+        else:
+            logger.info(
+                'master> Progress ({:.2f}% worked) #{}'.format(
+                    (worker_ids_completed * 100.0 / ids.total),
+                    cycle))
+        logger.debug('master> Sleeping #{}'.format(cycle))
+        master_condition.acquire()
+        master_condition.wait(10)
+        master_condition.release()
+        logger.debug('master> Waking up #{}'.format(cycle))
 
         for worker_name, worker_info in list(workers.items()):
             worker, incoming, control = worker_info
@@ -309,14 +305,12 @@ def multi_process(
                 worker_batch_completed += 1
                 worker_ids_completed += worker_status
             if worker_done:
-                cycle_activity = True
                 logger.info('master> Worker "{}" is done #{}'.format(
                     worker_name, cycle))
                 worker.join()
                 del workers[worker_name]
                 continue
             if worker_batch_completed:
-                cycle_activity = True
                 if ids_consumed:
                     incoming.put(None)
                 else:
