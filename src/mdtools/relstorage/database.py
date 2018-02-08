@@ -3,7 +3,8 @@ import logging
 import multiprocessing
 import psycopg2
 import psycopg2.extras
-import Queue
+
+from  six.moves import queue
 
 logger = logging.getLogger('mdtools.relstorage.database')
 
@@ -138,7 +139,7 @@ class Worker(Connection, multiprocessing.Process):
         while True:
             try:
                 order = self._incoming.get(block=True, timeout=1)
-            except Queue.Empty:
+            except queue.Empty:
                 logger.debug('{}> I am starving'.format(self.logname))
                 self._wake_up_master()
                 continue
@@ -186,7 +187,7 @@ class Consumer(multiprocessing.Process):
         while True:
             try:
                 order = self._outgoing.get(block=True)
-            except Queue.Empty:
+            except queue.Empty:
                 continue
             if order is None:
                 break
@@ -292,7 +293,7 @@ def multi_process(
             while True:
                 try:
                     worker_status = control.get_nowait()
-                except Queue.Empty:
+                except queue.Empty:
                     break
                 if worker_status is None:
                     worker_done = True
@@ -327,7 +328,7 @@ def multi_process(
             while True:
                 try:
                     consumer_status = consumer_control.get_nowait()
-                except Queue.Empty:
+                except queue.Empty:
                     break
                 if consumer_status is None:
                     logger.info('master> Consumer is done #{}'.format(cycle))
