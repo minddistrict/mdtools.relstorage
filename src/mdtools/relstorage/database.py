@@ -329,7 +329,6 @@ def multi_process(
                     consumer_status = consumer_control.get_nowait()
                 except Queue.Empty:
                     break
-                cycle_activity = True
                 if consumer_status is None:
                     logger.info('master> Consumer is done #{}'.format(cycle))
                     consumer.join()
