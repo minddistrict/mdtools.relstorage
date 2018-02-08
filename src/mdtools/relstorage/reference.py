@@ -23,7 +23,7 @@ def connect(journal=True):
                     'impossible to open references database {}.'.format(
                         self.db_name))
             cursor = connection.cursor()
-            cursor.execute("PRAGMA cache_size=20000")
+            cursor.execute("PRAGMA cache_size=25000")
             if not journal:
                 cursor.execute("PRAGMA journal_mode=OFF")
                 connection.isolation_level = None

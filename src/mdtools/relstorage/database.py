@@ -277,7 +277,7 @@ def multi_process(
                 (consumer_ids_completed * 100.0 / ids.total),
                 cycle))
         master_condition.acquire()
-        master_condition.wait(30)
+        master_condition.wait(15)
         master_condition.release()
         logger.debug('master> Waking up #{}'.format(cycle))
 
