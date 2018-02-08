@@ -216,7 +216,7 @@ def multi_process(
         worker_options=None,
         consumer_task=None,
         consumer_options=None,
-        queue_size=5,
+        queue_size=4,
         batch_size=100000):
     ids = Ids(dsn, batch_size=batch_size)
     ids_consumed = False
@@ -273,13 +273,21 @@ def multi_process(
     cycle_activity = True
     while len(workers) or consumer is not None:
         cycle += 1
+        if cycle % 10 == 0:
+            if consumer is not None:
+                logger.info(
+                    'master> Progress '
+                    '({:.2f}% worked, {:.2f}% consumed) #{}'.format(
+                        (worker_ids_completed * 100.0 / ids.total),
+                        (consumer_ids_completed * 100.0 / ids.total),
+                        cycle))
+            else:
+                logger.info(
+                    'master> Progress ({:.2f}% worked) #{}'.format(
+                        (worker_ids_completed * 100.0 / ids.total),
+                        cycle))
         if not cycle_activity:
-            logger.info(
-                'master> Progress '
-                '({:.2f}% worked, {:.2f}% consumed) #{}'.format(
-                    (worker_ids_completed * 100.0 / ids.total),
-                    (consumer_ids_completed * 100.0 / ids.total),
-                    cycle))
+            logger.debug('master> Sleeping #{}'.format(cycle))
             master_condition.acquire()
             master_condition.wait(30)
             master_condition.release()
@@ -331,7 +339,8 @@ def multi_process(
                 except queue.Empty:
                     break
                 if consumer_status is None:
-                    logger.info('master> Consumer is done #{}'.format(cycle))
+                    logger.info('master> Consumer "{}" is done #{}'.format(
+                        consumer.logname, cycle))
                     consumer.join()
                     consumer = None
                     break

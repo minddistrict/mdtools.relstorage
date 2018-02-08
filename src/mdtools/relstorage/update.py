@@ -60,7 +60,7 @@ class Updater(mdtools.relstorage.database.Worker):
 def relstorage_main():
     parser = argparse.ArgumentParser(description="ZODB update on relstorage")
     parser.add_argument(
-        '--queue-size', dest='queue_size', type=int, default=5)
+        '--queue-size', dest='queue_size', type=int, default=4)
     parser.add_argument(
         '--batch-size', dest='batch_size', type=int, default=100000)
     parser.add_argument(
