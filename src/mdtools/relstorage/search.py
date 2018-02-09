@@ -1,5 +1,4 @@
 import argparse
-import base64
 import io
 import logging
 import sys
@@ -85,7 +84,7 @@ class Searcher(Search, mdtools.relstorage.database.Worker):
             self.logname, self.iteration))
         for data, oid in batch:
             try:
-                self.search(base64.decodestring(data), oid)
+                self.search(data, oid)
             except Exception:
                 logger.exception(
                     '{}> Error while searching record "0x{:x}":'.format(

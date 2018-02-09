@@ -1,5 +1,4 @@
 import argparse
-import base64
 import io
 import logging
 
@@ -22,14 +21,6 @@ def create_processor():
         repickle_all=True)
 
 
-def decode_record(data):
-    return io.BytesIO(base64.decodestring(data))
-
-
-def encode_record(output_file):
-    return base64.encodestring(output_file.getvalue())
-
-
 class Updater(mdtools.relstorage.database.Worker):
 
     def __init__(self, **options):
@@ -43,9 +34,9 @@ class Updater(mdtools.relstorage.database.Worker):
             self.logname, self.iteration))
         for data, oid in batch:
             try:
-                output_file = self.processor.rename(decode_record(data))
+                output_file = self.processor.rename(io.BytesIO(data))
                 if output_file is not None:
-                    result.append((encode_record(output_file), oid))
+                    result.append((output_file.getvalue(), oid))
             except Exception:
                 logger.exception(
                     '{}> Error while processing record "0x{:x}":'.format(

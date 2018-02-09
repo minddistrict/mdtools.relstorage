@@ -1,5 +1,4 @@
 import argparse
-import base64
 import logging
 import os
 import sys
@@ -38,8 +37,7 @@ class Reader(mdtools.relstorage.database.Worker):
                 results.append(
                     (oid,
                      {ZODB.utils.u64(reference)
-                      for reference in ZODB.serialize.referencesf(
-                              base64.decodestring(data))}))
+                      for reference in ZODB.serialize.referencesf(data)}))
             except Exception:
                 logger.exception(
                     '{}> Error while reading record "0x{:x}":'.format(

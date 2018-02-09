@@ -3,12 +3,24 @@ import logging
 import multiprocessing
 import psycopg2
 import psycopg2.extras
+import six
+import base64
 
-from  six.moves import queue
+from six.moves import queue
 
 logger = logging.getLogger('mdtools.relstorage.database')
 
 FETCH_MANY = 10000
+
+if six.PY2:
+
+    decode_record = base64.decodestring
+    encode_record = base64.encodestring
+
+else:
+
+    decode_record = base64.decodebytes
+    encode_record = base64.encodebytes
 
 
 # Worker logic
@@ -107,7 +119,7 @@ class Worker(Connection, multiprocessing.Process):
                 cursor.execute("EXECUTE fetch_state (%s)", (oid,))
                 result = cursor.fetchone()
                 if result:
-                    batch.append((result[0], oid))
+                    batch.append((decode_record(result[0]), oid))
                 else:
                     raise AssertionError('OID disappeared')
         return batch
@@ -118,7 +130,8 @@ class Worker(Connection, multiprocessing.Process):
             psycopg2.extras.execute_batch(
                 cursor,
                 "EXECUTE update_state (%s, %s)",
-                batch,
+                ((encode_record(data), oid)
+                 for data, oid in six.iteritems(batch)),
                 page_size=10)
 
     def send_to_consumer(self, batch):
