@@ -286,7 +286,7 @@ def multi_process(
                     cycle))
         logger.debug('master> Sleeping #{}'.format(cycle))
         master_condition.acquire()
-        master_condition.wait(10)
+        master_condition.wait(30)
         master_condition.release()
         logger.debug('master> Waking up #{}'.format(cycle))
 
