@@ -3,27 +3,12 @@ import logging
 import multiprocessing
 import psycopg2
 import psycopg2.extras
-import six
-import base64
 
 from six.moves import queue
 
 logger = logging.getLogger('mdtools.relstorage.database')
 
 FETCH_MANY = 10000
-
-if six.PY2:
-
-    decode_record = base64.decodestring
-    encode_record = base64.encodestring
-
-else:
-
-    def decode_record(data):
-        return base64.decodebytes(data.encode('ascii'))
-
-    def encode_record(data):
-        return base64.encodebytes(data).decode('ascii')
 
 
 # Worker logic
@@ -105,12 +90,10 @@ class Worker(Connection, multiprocessing.Process):
         with connection.cursor() as cursor:
             cursor.execute(
                 "PREPARE fetch_state (int) AS "
-                "SELECT encode(state, 'base64') "
-                "FROM object_state WHERE zoid = $1")
+                "SELECT state FROM object_state WHERE zoid = $1")
             cursor.execute(
-                "PREPARE update_state (text, int) AS "
-                "UPDATE object_state SET state = decode($1, 'base64') "
-                "WHERE zoid = $2")
+                "PREPARE update_state (bytea, int) AS "
+                "UPDATE object_state SET state = $1 WHERE zoid = $2")
         connection.commit()
         return connection
 
@@ -122,7 +105,7 @@ class Worker(Connection, multiprocessing.Process):
                 cursor.execute("EXECUTE fetch_state (%s)", (oid,))
                 result = cursor.fetchone()
                 if result:
-                    batch.append((decode_record(result[0]), oid))
+                    batch.append((bytes(result[0]), oid))
                 else:
                     raise AssertionError('OID disappeared')
         return batch
@@ -133,8 +116,7 @@ class Worker(Connection, multiprocessing.Process):
             psycopg2.extras.execute_batch(
                 cursor,
                 "EXECUTE update_state (%s, %s)",
-                ((encode_record(data), oid)
-                 for data, oid in six.iteritems(batch)),
+                ((psycopg2.Binary(data), oid) for data, oid in batch),
                 page_size=10)
 
     def send_to_consumer(self, batch):
