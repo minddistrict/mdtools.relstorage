@@ -19,8 +19,11 @@ if six.PY2:
 
 else:
 
-    decode_record = base64.decodebytes
-    encode_record = base64.encodebytes
+    def decode_record(data):
+        return base64.decodebytes(data.encode('ascii'))
+
+    def encode_record(data):
+        return base64.encodebytes(data).decode('ascii')
 
 
 # Worker logic
