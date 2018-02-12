@@ -273,13 +273,13 @@ def multi_process(
         if consumer is not None:
             logger.info(
                 'master> Progress '
-                '({:.2f}% worked, {:.2f}% consumed) #{}'.format(
+                '({:.2f}% processed, {:.2f}% consumed) #{}'.format(
                     (worker_ids_completed * 100.0 / ids.total),
                     (consumer_ids_completed * 100.0 / ids.total),
                     cycle))
         else:
             logger.info(
-                'master> Progress ({:.2f}% worked) #{}'.format(
+                'master> Progress ({:.2f}% done) #{}'.format(
                     (worker_ids_completed * 100.0 / ids.total),
                     cycle))
         logger.debug('master> Sleeping #{}'.format(cycle))
