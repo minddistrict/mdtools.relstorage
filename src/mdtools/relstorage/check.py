@@ -78,11 +78,10 @@ def zodb_main(args=None):
         '--db', metavar='DATA.FS',
         help='use given Data.fs file')
     parser.add_argument(
-        '--save-references', metavar='FILE.DB', dest='filename',
+        '--references', metavar='FILE.DB', dest='filename',
         help='save computed references in a database for reuse')
     parser.add_argument(
-        '--override-references', action="store_true",
-        dest="override", default=False,
+        '--override', action="store_true", dest="override", default=False,
         help='override a reference database')
     parser.add_argument(
         '--rw', action='store_false', dest='readonly', default=True,
@@ -136,11 +135,10 @@ def relstorage_main():
     parser.add_argument(
         '--batch-size', dest='batch_size', type=int, default=100000)
     parser.add_argument(
-        '--save-references', metavar='FILE.DB', dest='filename',
+        '--references', metavar='FILE.DB', dest='filename',
         help='save computed references in a database for reuse')
     parser.add_argument(
-        '--override-references', action="store_true",
-        dest="override", default=False,
+        '--override', action="store_true", dest="override", default=False,
         help='override a reference database')
     parser.add_argument(
         "--quiet", action="store_true", help="suppress non-error messages")
