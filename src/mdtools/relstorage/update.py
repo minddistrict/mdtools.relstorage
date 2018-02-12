@@ -1,7 +1,7 @@
 import argparse
 import io
 import logging
-
+import sys
 import mdtools.relstorage.database
 import mdtools.relstorage.log
 import zodbupdate.convert
@@ -48,7 +48,10 @@ class Updater(mdtools.relstorage.database.Worker):
 # End of updater logic
 
 
-def relstorage_main():
+def relstorage_main(args=None):
+    if args is None:
+        args = sys.argv[1:]
+
     parser = argparse.ArgumentParser(description="ZODB update on relstorage")
     parser.add_argument(
         '--queue-size', dest='queue_size', type=int, default=4)
@@ -62,7 +65,7 @@ def relstorage_main():
         'dsn',
         help="DSN example: dbname='maas_dev'")
 
-    args = parser.parse_args()
+    args = parser.parse_args(args)
     mdtools.relstorage.log.setup(args)
     mdtools.relstorage.database.multi_process(
         dsn=args.dsn,

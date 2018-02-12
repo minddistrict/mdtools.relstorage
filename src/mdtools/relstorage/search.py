@@ -134,7 +134,10 @@ def zodb_main(args=None):
             search.search(record.data, ZODB.utils.u64(record.oid))
 
 
-def relstorage_main():
+def relstorage_main(args=None):
+    if args is None:
+        args = sys.argv[1:]
+
     parser = argparse.ArgumentParser(description="ZODB search on relstorage")
     parser.add_argument(
         '--queue-size', dest='queue_size', type=int, default=4)
@@ -151,7 +154,7 @@ def relstorage_main():
         'dsn', help="DSN example: dbname='maas_dev'")
     parser.add_argument('classes', metavar='classes', nargs='*')
 
-    args = parser.parse_args()
+    args = parser.parse_args(args)
     mdtools.relstorage.log.setup(args)
     mdtools.relstorage.database.multi_process(
         dsn=args.dsn,
