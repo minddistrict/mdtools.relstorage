@@ -80,8 +80,7 @@ def main(args=None):
         os.path.join(os.path.join(args.output, 'sql.sh')))
     os.makedirs(os.path.join(args.output, 'todo'))
     if blobs:
-        compute_blob = ZODB.blob.FilesystemHelper(
-            args.blobs).layout.oid_to_path
+        compute_blob = ZODB.blob.BushyLayout().oid_to_path
         shell = open(os.path.join(args.output, 'blobs.sh'), 'w')
         shell.write('#!/usr/bin/env bash\n')
         shell.write('if ! test -d 0x00; then\n')
