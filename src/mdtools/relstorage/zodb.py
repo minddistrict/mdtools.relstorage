@@ -1,3 +1,4 @@
+import io
 import os
 import stat
 import ZODB.DB
@@ -6,14 +7,13 @@ import ZODB.FileStorage.FileStorage
 import ZEO.ClientStorage
 
 
-
-def open_database(opts):
+def open(opts):
     if opts.db and opts.zeo:
-        raise ValueError('you specified both ZEO and FileStorage; pick one')
+        raise ValueError('you specified both ZEO and FileStorage')
     if opts.db and opts.config:
-        raise ValueError('you specified both ZConfig and FileStorage; pick one')
+        raise ValueError('you specified both ZConfig and FileStorage')
     if opts.config and opts.zeo:
-        raise ValueError('you specified both ZConfig and ZEO; pick one')
+        raise ValueError('you specified both ZConfig and ZEO')
     if opts.storage and not opts.zeo:
         raise ValueError('a ZEO storage was specified without ZEO connection')
 
@@ -49,7 +49,7 @@ def open_database(opts):
         db = ZODB.DB.DB(ZEO.ClientStorage.ClientStorage(
             zeo_address, storage=zeo_storage, read_only=opts.readonly))
     elif opts.config:
-        db = ZODB.config.databaseFromFile(open(opts.config))
+        db = ZODB.config.databaseFromFile(io.open(opts.config))
     else:
         raise ValueError('please specify a database')
     return db

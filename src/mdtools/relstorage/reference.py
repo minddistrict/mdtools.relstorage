@@ -1,69 +1,92 @@
-
+import logging
 import sqlite3
 
-from ZODB.utils import u64
-from ZODB.serialize import referencesf
-from zope.interface import implements
+import ZODB.utils
+import zope.interface
+import mdtools.relstorage.interfaces
 
-from mdtools.relstorage.interfaces import IReferencesDatabase
+COMMIT_EVERY = 50000
+
+logger = logging.getLogger('mdtools.relstorage.reference')
 
 
-def connect(callback):
+def connect(journal=True):
     """Decorator for the reference database to access the sqlite DB."""
 
-    def wrapper(self, *args, **kwargs):
-        try:
-            connection = sqlite3.connect(self.db_name)
-        except:
-            raise ValueError(
-                'impossible to open references database {}.'.format(
-                    self.db_name))
-        try:
-            result = callback(self, connection, *args, **kwargs)
-        finally:
-            connection.close()
-        return result
+    def decorator(callback):
 
-    return wrapper
+        def wrapper(self, *args, **kwargs):
+            try:
+                connection = sqlite3.connect(self.db_name)
+            except Exception:
+                raise ValueError(
+                    'impossible to open references database {}.'.format(
+                        self.db_name))
+            cursor = connection.cursor()
+            cursor.execute("PRAGMA cache_size=25000")
+            if not journal:
+                cursor.execute("PRAGMA journal_mode=OFF")
+                connection.isolation_level = None
+            connection.commit()
+            try:
+                result = callback(self, connection, *args, **kwargs)
+            finally:
+                connection.close()
+            return result
+
+        return wrapper
+
+    return decorator
 
 
-class ReferencesDatabase(object):
-    implements(IReferencesDatabase)
+@zope.interface.implementer(mdtools.relstorage.interfaces.IDatabase)
+class Database(object):
 
     def __init__(self, db_name):
         self.db_name = db_name
 
-    @connect
-    def analyzeRecords(self, connection, records):
+    @connect(journal=False)
+    def add_references(self, connection, records):
         cursor = connection.cursor()
-        for record in records:
-            current_oid = u64(record.oid)
-            referred_oids = set(map(u64, referencesf(record.data)))
-
-            for referred_oid in referred_oids or [-1]:
+        for source_oid, target_oids in records:
+            for target_oid in target_oids or [-1]:
                 cursor.execute("""
 INSERT INTO links (source_oid, target_oid) VALUES
 (?, ?)
-            """, (current_oid, referred_oid))
-        connection.commit()
+            """, (source_oid, target_oid))
 
-    @connect
-    def createDatabase(self, connection):
+    @connect()
+    def create_database(self, connection):
+        logger.info('Creating reference database')
         cursor = connection.cursor()
+        cursor.execute("PRAGMA page_size=16384")
+        cursor.execute("VACUUM")
+        connection.commit()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA main.locking_mode=EXCLUSIVE")
+        cursor.execute("PRAGMA main.synchronous=OFF")
         cursor.execute("""
 CREATE TABLE IF NOT EXISTS links
 (source_oid BIGINT, target_oid BIGINT)
         """)
+        connection.commit()
+
+    @connect(journal=False)
+    def finish_database(self, connection):
+        logger.info('Indexing reference database')
+        cursor = connection.cursor()
         cursor.execute("""
 CREATE INDEX IF NOT EXISTS source_oid_index ON links (source_oid)
         """)
         cursor.execute("""
 CREATE INDEX IF NOT EXISTS target_oid_index ON links (target_oid)
         """)
-        connection.commit()
+        cursor.execute("PRAGMA main.locking_mode=NORMAL")
+        cursor.execute("PRAGMA main.synchronous=NORMAL")
+        cursor.execute("PRAGMA optimize")
 
-    @connect
-    def checkDatabase(self, connection):
+    @connect()
+    def check_database(self, connection):
         cursor = connection.cursor()
         try:
             result = cursor.execute("SELECT count(*) FROM links")
@@ -72,8 +95,8 @@ CREATE INDEX IF NOT EXISTS target_oid_index ON links (target_oid)
             return False
         return True
 
-    @connect
-    def getUnUsedOIDs(self, connection):
+    @connect()
+    def get_unused_oids(self, connection):
         oids = set([])
         cursor = connection.cursor()
         result = cursor.execute("""
@@ -94,8 +117,8 @@ EXCEPT SELECT DISTINCT source_oid FROM links_to_root
             oids.add(oid[0])
         return oids
 
-    @connect
-    def linkedToOID(self, connection, oid, depth):
+    @connect()
+    def get_linked_to_oid(self, connection, oid, depth):
         cursor = connection.cursor()
         result = cursor.execute("""
 WITH RECURSIVE linked_to_oid (source_oid, depth) AS (
@@ -116,9 +139,9 @@ SELECT DISTINCT source_oid, depth FROM linked_to_oid WHERE depth = ?
             linked.append((line[0], line[1]))
         return linked
 
-    @connect
-    def getMissingOIDs(self, connection):
-        oids = set([])
+    @connect()
+    def get_missing_oids(self, connection):
+        oids = set()
         cursor = connection.cursor()
         result = cursor.execute("""
 SELECT a.target_oid FROM links AS a LEFT OUTER JOIN links AS b
@@ -129,26 +152,26 @@ WHERE a.target_oid > -1 AND b.source_oid IS NULL
             oids.add(oid[0])
         return oids
 
-    @connect
-    def getForwardReferences(self, connection, oid):
-        oids = set([])
+    @connect()
+    def get_forward_references(self, connection, oid):
+        oids = set()
         cursor = connection.cursor()
         result = cursor.execute("""
 SELECT target_oid FROM links
 WHERE source_oid = ? AND target_oid > -1
-        """, (u64(oid), ))
+        """, (ZODB.utils.u64(oid), ))
         for oid in result.fetchall():
             oids.add(oid[0])
         return oids
 
-    @connect
-    def getBackwardReferences(self, connection, oid):
+    @connect()
+    def get_backward_references(self, connection, oid):
         oids = set([])
         cursor = connection.cursor()
         result = cursor.execute("""
 SELECT source_oid FROM links
 WHERE target_oid = ?
-        """, (u64(oid), ))
+        """, (ZODB.utils.u64(oid), ))
         for oid in result.fetchall():
             oids.add(oid[0])
         return oids
