@@ -6,7 +6,6 @@ import mdtools.relstorage.database
 import mdtools.relstorage.log
 import zodbupdate.convert
 import zodbupdate.serialize
-import zodbupdate.main
 
 logger = logging.getLogger('mdtools.relstorage.update')
 
