@@ -1,7 +1,7 @@
 Changes
 =======
 
-2.1 (unreleased)
+2.1 (2018-03-28)
 ----------------
 
 - zodblinks has now an option to find what is the shortest relation
