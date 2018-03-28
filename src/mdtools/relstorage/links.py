@@ -38,8 +38,12 @@ def main(args=None):
         '--rw', action='store_false', dest='readonly', default=True,
         help='open the database read-write (default: read-only)')
     parser.add_argument(
-        '--oid', metavar='OID', dest='oid', type=oid,
-        help='oid')
+        '--from-oid', metavar='FROM OID', dest='from_oid', type=oid,
+        help='search from the given oid')
+    parser.add_argument(
+        '--to-oid', metavar='TO OID', dest='to_oid', type=oid,
+        help='search to the given oid',
+        default=0)
     args = parser.parse_args(args)
     try:
         references = mdtools.relstorage.reference.Database(args.refsdb)
@@ -50,9 +54,21 @@ def main(args=None):
     except ValueError as error:
         parser.error(error.args[0])
     connection = db.open()
-    results = references.get_linked_to_oid(args.oid, args.depth)
-    print('Found {} results'.format(len(results)))
-    for found_id, depth in results:
+    if args.to_oid:
+        results = references.get_path_to_oid(
+            args.from_oid, args.to_oid, args.depth)
+        if results is None:
+            print('Could not find a path from 0x{:x} to 0x{:x}'.format(
+                args.from_oid, args.to_oid))
+            return
+        else:
+            print('Path from 0x{:x} to 0x{:x} contains {} items:'.format(
+                args.from_oid, args.to_oid, len(results)))
+    else:
+        results = references.get_linked_to_oid(args.from_oid, args.depth)
+        print('Found {} items linked to 0x{:x} at depth {}:'.format(
+            len(results), args.from_oid, args.depth))
+    for depth, found_id in results:
         print('{}: 0x{:x}: {}'.format(
             depth,
             found_id,

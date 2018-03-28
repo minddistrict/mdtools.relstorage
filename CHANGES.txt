@@ -4,8 +4,8 @@ Changes
 2.1 (unreleased)
 ----------------
 
-- Nothing changed yet.
-
+- zodblinks has now an option to find what is the shortest relation
+  chain between two objects in the database.
 
 2.0 (2018-02-13)
 ----------------
