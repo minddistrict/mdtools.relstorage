@@ -165,9 +165,9 @@ SELECT DISTINCT source_oid, parent_oid, depth FROM path_to_oid
         path = []
         parent_oid = to_oid
         while parent_oid != from_oid:
-            if parent_oid not in parents:
+            info = parents.get(parent_oid)
+            if info is None:
                 return None
-            info = parents[parent_oid]
             path.append(info)
             parent_oid = info[1]
         path.reverse()
