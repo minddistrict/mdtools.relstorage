@@ -1,5 +1,6 @@
 import logging
 import sqlite3
+import sys
 
 import ZODB.utils
 import zope.interface
@@ -136,8 +137,42 @@ SELECT DISTINCT source_oid, depth FROM linked_to_oid WHERE depth = ?
         """, (oid, depth, depth))
         linked = []
         for line in result.fetchall():
-            linked.append((line[0], line[1]))
+            linked.append((line[1], line[0]))
         return linked
+
+    @connect()
+    def get_path_to_oid(self, connection, from_oid, to_oid, depth):
+        cursor = connection.cursor()
+        result = cursor.execute("""
+WITH RECURSIVE path_to_oid (source_oid, parent_oid, depth) AS (
+    SELECT source_oid, ?, 1
+    FROM links
+    WHERE target_oid = ?
+    UNION
+    SELECT link.source_oid, link.target_oid, target.depth + 1
+    FROM links AS link JOIN path_to_oid AS target
+        ON target.source_oid = link.target_oid
+    WHERE target.depth < ?
+    ORDER BY link.source_oid
+)
+SELECT DISTINCT source_oid, parent_oid, depth FROM path_to_oid
+        """, (from_oid, from_oid, depth))
+        parents = {}
+        for line in result.fetchall():
+            info = (line[2], line[1])
+            if info < parents.get(line[0], (sys.maxsize, None)):
+                parents[line[0]] = info
+        path = []
+        parent_oid = to_oid
+        while parent_oid != from_oid:
+            if parent_oid not in parents:
+                return None
+            info = parents[parent_oid]
+            path.append(info)
+            parent_oid = info[1]
+        path.reverse()
+        path.append((len(path), to_oid))
+        return path
 
     @connect()
     def get_missing_oids(self, connection):
