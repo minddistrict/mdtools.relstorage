@@ -40,7 +40,7 @@ class Updater(mdtools.relstorage.database.Worker):
                     '{}> Error while processing record "0x{:x}":'.format(
                         self.logname, oid))
         self.write_batch(result)
-        return len(result)
+        return len(result), len(batch)
 
 
 # End of updater logic

@@ -91,7 +91,7 @@ class Searcher(Search, mdtools.relstorage.database.Worker):
                         self.logname, oid))
             else:
                 done += 1
-        return done
+        return done, len(batch)
 
 
 def zodb_main(args=None):

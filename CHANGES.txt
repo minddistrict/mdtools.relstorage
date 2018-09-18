@@ -4,8 +4,10 @@ Changes
 2.2 (unreleased)
 ----------------
 
-- Nothing changed yet.
+- relupdate now calls zodbupdate to rename class and no longer
+  converts the database to Python 3.
 
+- improve feedback and progress output.
 
 2.1 (2018-03-28)
 ----------------
