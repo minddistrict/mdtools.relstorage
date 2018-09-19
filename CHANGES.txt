@@ -1,7 +1,7 @@
 Changes
 =======
 
-2.2 (unreleased)
+2.2 (2018-09-19)
 ----------------
 
 - relupdate now calls zodbupdate to rename class and no longer
