@@ -5,6 +5,7 @@ import sys
 import mdtools.relstorage.database
 import mdtools.relstorage.log
 import zodbupdate.convert
+import zodbupdate.main
 import zodbupdate.serialize
 
 logger = logging.getLogger('mdtools.relstorage.update')
@@ -14,10 +15,8 @@ logger = logging.getLogger('mdtools.relstorage.update')
 
 def create_processor():
     return zodbupdate.serialize.ObjectRenamer(
-        renames=zodbupdate.convert.default_renames().copy(),
-        decoders=zodbupdate.convert.load_decoders().copy(),
-        pickle_protocol=3,
-        repickle_all=True)
+        zodbupdate.main.load_renames().copy(),
+        None)
 
 
 class Updater(mdtools.relstorage.database.Worker):
@@ -41,7 +40,7 @@ class Updater(mdtools.relstorage.database.Worker):
                     '{}> Error while processing record "0x{:x}":'.format(
                         self.logname, oid))
         self.write_batch(result)
-        return len(result)
+        return len(result), len(batch)
 
 
 # End of updater logic

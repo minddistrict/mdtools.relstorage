@@ -43,7 +43,7 @@ class Reader(mdtools.relstorage.database.Worker):
                     '{}> Error while reading record "0x{:x}":'.format(
                         self.logname, oid))
         self.send_to_consumer(results)
-        return len(results)
+        return len(results), len(batch)
 
 
 class Writer(mdtools.relstorage.database.Consumer):
@@ -56,7 +56,7 @@ class Writer(mdtools.relstorage.database.Consumer):
         logging.debug('{}> Write data #{}'.format(
             self.logname, self.iteration))
         self.references.add_references(job)
-        return len(job)
+        return len(job), len(job)
 
 
 def zodb_main(args=None):

@@ -1,5 +1,6 @@
 import contextlib
 import logging
+import time
 import multiprocessing
 import psycopg2
 import psycopg2.extras
@@ -66,6 +67,39 @@ class Ids(Connection):
                 yield job
 
         assert self.total == self.fetched
+
+
+class Progress:
+
+    def __init__(self, ids):
+        self.start = time.time()
+        self.ids = ids
+
+    def _eta(self, completed):
+        if not completed:
+            return 'n/a'
+        eta = self.start + (
+            (self.ids.total / float(completed)) * (time.time() - self.start))
+        return time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(eta))
+
+    def _percent(self, completed):
+        return completed * 100.0 / self.ids.total
+
+    def report(self, cycle, worker_completed, consumer_completed):
+        if consumer_completed:
+            logger.info(
+                'master> Progress '
+                '({:.2f}% processed, {:.2f}% consumed, eta {}) #{}'.format(
+                    self._percent(worker_completed),
+                    self._percent(consumer_completed),
+                    self._eta(consumer_completed),
+                    cycle))
+        else:
+            logger.info(
+                'master> Progress ({:.2f}% done, eta {}) #{}'.format(
+                    self._percent(worker_completed),
+                    self._eta(worker_completed),
+                    cycle))
 
 
 class Worker(Connection, multiprocessing.Process):
@@ -150,9 +184,10 @@ class Worker(Connection, multiprocessing.Process):
         try:
             for job in self._job_from_master():
                 self.iteration += 1
-                result = self.process(job)
-                assert isinstance(result, int)
-                self._control.put(result)
+                changed, total = self.process(job)
+                assert isinstance(changed, int)
+                assert isinstance(total, int)
+                self._control.put((changed, total))
         finally:
             self._control.put(None)
             logger.debug('{}> I am done'.format(self.logname))
@@ -196,9 +231,10 @@ class Consumer(multiprocessing.Process):
         try:
             for job in self._job_from_workers():
                 self.iteration += 1
-                result = self.process(job)
-                assert isinstance(result, int)
-                self._control.put(result)
+                changed, total = self.process(job)
+                assert isinstance(changed, int)
+                assert isinstance(total, int)
+                self._control.put((changed, total))
         finally:
             self._control.put(None)
             logger.debug('{}> I am done'.format(self.logname))
@@ -220,9 +256,13 @@ def multi_process(
     ids_consumed = False
     ids_fetch = ids.fetch()
 
+    progress = Progress(ids)
+
     processes_count = multiprocessing.cpu_count()
     workers = {}
+    worker_ids_changed = 0
     worker_ids_completed = 0
+    consumer_ids_changed = 0
     consumer_ids_completed = 0
     master_condition = multiprocessing.Condition()
     if consumer_task is not None:
@@ -270,18 +310,7 @@ def multi_process(
     cycle = 0
     while len(workers) or consumer is not None:
         cycle += 1
-        if consumer is not None:
-            logger.info(
-                'master> Progress '
-                '({:.2f}% processed, {:.2f}% consumed) #{}'.format(
-                    (worker_ids_completed * 100.0 / ids.total),
-                    (consumer_ids_completed * 100.0 / ids.total),
-                    cycle))
-        else:
-            logger.info(
-                'master> Progress ({:.2f}% done) #{}'.format(
-                    (worker_ids_completed * 100.0 / ids.total),
-                    cycle))
+        progress.report(cycle, worker_ids_completed, consumer_ids_completed)
         logger.debug('master> Sleeping #{}'.format(cycle))
         master_condition.acquire()
         master_condition.wait(30)
@@ -301,7 +330,8 @@ def multi_process(
                     worker_done = True
                     break
                 worker_batch_completed += 1
-                worker_ids_completed += worker_status
+                worker_ids_changed += worker_status[0]
+                worker_ids_completed += worker_status[1]
             if worker_done:
                 logger.info('master> Worker "{}" is done #{}'.format(
                     worker_name, cycle))
@@ -336,10 +366,21 @@ def multi_process(
                     consumer.join()
                     consumer = None
                     break
-                consumer_ids_completed += consumer_status
+                consumer_ids_changed += consumer_status[0]
+                consumer_ids_completed += consumer_status[1]
 
     if worker_ids_completed == ids.total:
         logger.info('master> All done')
     else:
         logger.error('master> Missed {} objects'.format(
             ids.total - worker_ids_completed))
+    if worker_ids_changed != worker_ids_completed:
+        logger.info('master> Processed {} out of {} ({:.2f}%)'.format(
+            worker_ids_changed,
+            worker_ids_completed,
+            worker_ids_changed * 100.0 / worker_ids_completed))
+    if consumer_ids_changed != consumer_ids_completed:
+        logger.info('master> Consumed {} out of {} ({:.2f}%)'.format(
+            consumer_ids_changed,
+            consumer_ids_completed,
+            consumer_ids_changed * 100.0 / consumer_ids_completed))
