@@ -16,6 +16,7 @@ setup(
     package_dir={'': 'src'},
     install_requires=[
         'Relstorage',
+        'python-dateutil',
         'zodbupdate >= 1.0',
         'ZODB',
         'ZEO',
