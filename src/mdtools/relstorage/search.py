@@ -17,10 +17,12 @@ logger = logging.getLogger('mdtools.relstorage.search')
 
 class Search(object):
 
-    def __init__(self, classes=[], search_data=False, analyse_data=False):
+    def __init__(self, classes=[], search_data=False, analyse_data=False,
+                 no_btrees=True):
         self.classes = classes
         self.search_data = search_data
         self.analyse_data = analyse_data
+        self.no_btrees = no_btrees
         self.usages = collections.Counter()
         self.sizes = collections.Counter()
         self.broken = collections.Counter()
@@ -35,7 +37,7 @@ class Search(object):
             self.broken[name] += 1
         if self.classes and name in self.classes:
             logger.info(
-                'Instance of {} found  in record "0x{:x}"'.format(
+                'Reference to {} found in record "0x{:x}"'.format(
                     name, self._current_oid))
             self.found[name] += 1
 
@@ -82,30 +84,33 @@ class Search(object):
             self._persistent_load,
             self._find_global)
         symb = self._read_class_meta(unpickler.load())
-        if self.search_data:
-            unpickler.load()
-        self.analyse(symb, data)
-
-    def analyse(self, symb, data):
         if isinstance(symb, tuple):
             name = '.'.join(symb)
-            self.usages[name] += 1
-            self.sizes[name] += len(data)
+            if not (self.no_btrees and name.startswith('BTrees')):
+                self.usages[name] += 1
+                self.sizes[name] += len(data)
+        if self.search_data:
+            unpickler.load()
 
     def report(self):
         for name, count in self.found.items():
-            logger.error('Found {}: {} average size {:.2f}'.format(
-                name, count, self.sizes[name] / count))
+            logger.error(
+                'Found {}: {} average size {:.2f}'.format(
+                    name, count, self.sizes[name] / count))
         for name, count in self.broken.items():
-            logger.error('Broken {}: {} average size {:.2f}'.format(
-                name, count, self.sizes[name] / count))
+            logger.error(
+                'Broken {}: {} average size {:.2f}'.format(
+                    name, count, self.sizes[name] / count))
         if self.analyse_data:
             for name, count in self.usages.most_common(20):
-                logger.error('Most common {}: {} average size {:.2f}'.format(
-                    name, count, self.sizes[name] / count))
+                logger.error(
+                    'Most common {}: {} average size {:.2f}'.format(
+                        name, count, self.sizes[name] / count))
             for name, size in self.sizes.most_common(20):
-                logger.error('Largest {}: {} average size {:.2f}'.format(
-                    name, self.usages[name], size / self.usages[name]))
+                logger.error(
+                    'Most common per size '
+                    '{}: {} average size {:.2f}'.format(
+                        name, self.usages[name], size / self.usages[name]))
 
 
 class Searcher(Search, mdtools.relstorage.database.Worker):
@@ -193,7 +198,10 @@ def relstorage_main(args=None):
         help='check inside persisted data too')
     parser.add_argument(
         '--analyse', action="store_true", dest="analyse_data", default=False,
-        help='check inside persisted data too')
+        help='analyse and report statistics about all records')
+    parser.add_argument(
+        '--no-btrees', action="store_true", dest="no_btrees", default=True,
+        help='ignore btrees while analyse')
     parser.add_argument(
         "--quiet", action="store_true", help="suppress non-error messages")
     parser.add_argument(
@@ -210,7 +218,8 @@ def relstorage_main(args=None):
         worker_options={
             'classes': args.classes,
             'search_data': args.search_data,
-            'analyse_data': args.analyse_data},
+            'analyse_data': args.analyse_data,
+            'no_btrees': args.no_btrees},
         queue_size=args.queue_size,
         batch_size=args.batch_size,
         min_date=args.min_date,
