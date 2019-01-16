@@ -1,7 +1,10 @@
+import ZODB.utils
 import contextlib
 import logging
 import time
 import multiprocessing
+import dateutil.parser
+import persistent.TimeStamp
 import psycopg2
 import psycopg2.extras
 
@@ -10,6 +13,13 @@ from six.moves import queue
 logger = logging.getLogger('mdtools.relstorage.database')
 
 FETCH_MANY = 10000
+
+
+def date_to_tid(date_as_str):
+    date = dateutil.parser.parse(date_as_str)
+    stamp = persistent.TimeStamp.TimeStamp(
+        date.year, date.month, date.day, date.hour, date.minute, date.second)
+    return ZODB.utils.u64(stamp.raw())
 
 
 # Worker logic
@@ -35,23 +45,43 @@ class Connection(object):
 
 class Ids(Connection):
 
-    def __init__(self, dsn, batch_size):
+    def __init__(self, dsn, batch_size, min_date=None, max_date=None):
         super(Ids, self).__init__(dsn)
         assert batch_size % FETCH_MANY == 0
+        self.min_date = min_date
+        self.max_date = max_date
         self.batch_size = batch_size
         self.total = 0
         self.fetched = 0
 
     def fetch(self):
         logger.info('master> Batch size is {}'.format(self.batch_size))
+
+        where = []
+        params = ()
+        if self.min_date is not None:
+            where.append('tid > %s')
+            params += (date_to_tid(self.min_date),)
+        if self.max_date is not None:
+            where.append('tid < %s')
+            params += (date_to_tid(self.max_date),)
+        if where:
+            filters = ' WHERE {}'.format(' AND '.join(where))
+            sorted_filters = filters + ' ORDER BY tid, zoid'
+        else:
+            filters = ''
+            sorted_filters = ' ORDER BY zoid'
+
         with self.new_cursor() as cursor:
-            cursor.execute("SELECT count(*) FROM object_state;")
+            cursor.execute(
+                "SELECT count(*) FROM object_state" + filters, params)
             self.total = cursor.fetchone()[0]
             logger.info('master> Found {} objects, estimated {} batch'.format(
                 self.total, (self.total // self.batch_size) + 1))
 
         with self.new_cursor(name='ids') as cursor:
-            cursor.execute("SELECT zoid FROM object_state ORDER BY zoid")
+            cursor.execute(
+                "SELECT zoid FROM object_state" + sorted_filters, params)
             while True:
                 job = []
 
@@ -251,8 +281,10 @@ def multi_process(
         consumer_task=None,
         consumer_options=None,
         queue_size=4,
-        batch_size=100000):
-    ids = Ids(dsn, batch_size=batch_size)
+        batch_size=100000,
+        min_date=None,
+        max_date=None):
+    ids = Ids(dsn, batch_size, min_date, max_date)
     ids_consumed = False
     ids_fetch = ids.fetch()
 

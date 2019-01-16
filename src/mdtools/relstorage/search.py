@@ -1,4 +1,5 @@
 import argparse
+import collections
 import io
 import logging
 import sys
@@ -16,20 +17,29 @@ logger = logging.getLogger('mdtools.relstorage.search')
 
 class Search(object):
 
-    def __init__(self, classes=[], search_data=False):
+    def __init__(self, classes=[], search_data=False, analyse_data=False,
+                 no_btrees=True):
         self.classes = classes
         self.search_data = search_data
+        self.analyse_data = analyse_data
+        self.no_btrees = no_btrees
+        self.usages = collections.Counter()
+        self.sizes = collections.Counter()
+        self.broken = collections.Counter()
+        self.found = collections.Counter()
 
     def _validate(self, cls_info, cls):
-        fullname = '.'.join(cls_info)
+        name = '.'.join(cls_info)
         if zodbupdate.utils.is_broken(cls):
             logger.error(
                 'Broken class {} in record "0x{:x}"'.format(
-                    fullname, self._current_oid))
-        if self.classes and fullname in self.classes:
+                    name, self._current_oid))
+            self.broken[name] += 1
+        if self.classes and name in self.classes:
             logger.info(
-                'Instance of {} found  in record "0x{:x}"'.format(
-                    fullname, self._current_oid))
+                'Reference to {} found in record "0x{:x}"'.format(
+                    name, self._current_oid))
+            self.found[name] += 1
 
     def _read_class_meta(self, class_meta):
         if isinstance(class_meta, tuple):
@@ -37,10 +47,17 @@ class Search(object):
             if isinstance(symb, tuple):
                 self._validate(symb, ZODB.broken.find_global(
                     *symb, Broken=zodbupdate.serialize.ZODBBroken))
-            else:
-                symb_info = (getattr(symb, '__module__', None),
-                             getattr(symb, '__name__', None))
-                self._validate(symb_info, symb)
+                return symb
+            symb_info = (getattr(symb, '__module__', None),
+                         getattr(symb, '__name__', None))
+            self._validate(symb_info, symb)
+            return symb_info
+        if isinstance(class_meta, type):
+            symb_info = (getattr(class_meta, '__module__', None),
+                         getattr(class_meta, '__name__', None))
+            self._validate(symb_info, class_meta)
+            return symb_info
+        return None
 
     def _find_global(self, *cls_info):
         cls = ZODB.broken.find_global(
@@ -66,9 +83,34 @@ class Search(object):
             io.BytesIO(data),
             self._persistent_load,
             self._find_global)
-        self._read_class_meta(unpickler.load())
+        symb = self._read_class_meta(unpickler.load())
+        if isinstance(symb, tuple):
+            name = '.'.join(symb)
+            if not (self.no_btrees and name.startswith('BTrees')):
+                self.usages[name] += 1
+                self.sizes[name] += len(data)
         if self.search_data:
             unpickler.load()
+
+    def report(self):
+        for name, count in self.found.items():
+            logger.error(
+                'Found {}: {} average size {:.2f}'.format(
+                    name, count, self.sizes[name] / count))
+        for name, count in self.broken.items():
+            logger.error(
+                'Broken {}: {} average size {:.2f}'.format(
+                    name, count, self.sizes[name] / count))
+        if self.analyse_data:
+            for name, count in self.usages.most_common(20):
+                logger.error(
+                    'Most common {}: {} average size {:.2f}'.format(
+                        name, count, self.sizes[name] / count))
+            for name, size in self.sizes.most_common(20):
+                logger.error(
+                    'Most common per size '
+                    '{}: {} average size {:.2f}'.format(
+                        name, self.usages[name], size / self.usages[name]))
 
 
 class Searcher(Search, mdtools.relstorage.database.Worker):
@@ -92,6 +134,10 @@ class Searcher(Search, mdtools.relstorage.database.Worker):
             else:
                 done += 1
         return done, len(batch)
+
+    def run(self):
+        super().run()
+        self.report()
 
 
 def zodb_main(args=None):
@@ -144,8 +190,18 @@ def relstorage_main(args=None):
     parser.add_argument(
         '--batch-size', dest='batch_size', type=int, default=100000)
     parser.add_argument(
+        '--min-date', help='Search in transaction after this date')
+    parser.add_argument(
+        '--max-date', help='Search in transaction before this date')
+    parser.add_argument(
         '--data', action="store_true", dest="search_data", default=False,
         help='check inside persisted data too')
+    parser.add_argument(
+        '--analyse', action="store_true", dest="analyse_data", default=False,
+        help='analyse and report statistics about all records')
+    parser.add_argument(
+        '--no-btrees', action="store_true", dest="no_btrees", default=True,
+        help='ignore btrees while analyse')
     parser.add_argument(
         "--quiet", action="store_true", help="suppress non-error messages")
     parser.add_argument(
@@ -161,6 +217,10 @@ def relstorage_main(args=None):
         worker_task=Searcher,
         worker_options={
             'classes': args.classes,
-            'search_data': args.search_data},
+            'search_data': args.search_data,
+            'analyse_data': args.analyse_data,
+            'no_btrees': args.no_btrees},
         queue_size=args.queue_size,
-        batch_size=args.batch_size)
+        batch_size=args.batch_size,
+        min_date=args.min_date,
+        max_date=args.max_date)
