@@ -4,8 +4,8 @@ Changes
 2.3 (unreleased)
 ----------------
 
-- Nothing changed yet.
-
+- Add date min/max and some statistics to zodb search, so you can find out
+  which objects changed in a given timeframe.
 
 2.2 (2018-09-19)
 ----------------
