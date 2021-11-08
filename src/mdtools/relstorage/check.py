@@ -11,7 +11,6 @@ import mdtools.relstorage.log
 import mdtools.relstorage.reference
 import mdtools.relstorage.zodb
 
-
 logger = logging.getLogger('mdtools.relstorage.check')
 
 
@@ -21,7 +20,8 @@ def read_database(db):
             source_oid = ZODB.utils.u64(record.oid)
             target_oids = {
                 ZODB.utils.u64(reference)
-                for reference in ZODB.serialize.referencesf(record.data)}
+                for reference in ZODB.serialize.referencesf(record.data)
+            }
             yield source_oid, target_oids
 
 
@@ -30,14 +30,14 @@ class Reader(mdtools.relstorage.database.Worker):
     def process(self, job):
         results = []
         batch = self.read_batch(job)
-        logger.debug('{}> Reading #{}'.format(
-            self.logname, self.iteration))
+        logger.debug('{}> Reading #{}'.format(self.logname, self.iteration))
         for data, oid in batch:
             try:
-                results.append(
-                    (oid,
-                     {ZODB.utils.u64(reference)
-                      for reference in ZODB.serialize.referencesf(data)}))
+                results.append((
+                    oid, {
+                        ZODB.utils.u64(reference)
+                        for reference in ZODB.serialize.referencesf(data)
+                    }))
             except Exception:
                 logger.exception(
                     '{}> Error while reading record "0x{:x}":'.format(
@@ -53,8 +53,8 @@ class Writer(mdtools.relstorage.database.Consumer):
         super(Writer, self).__init__(**options)
 
     def process(self, job):
-        logging.debug('{}> Write data #{}'.format(
-            self.logname, self.iteration))
+        logging.debug(
+            '{}> Write data #{}'.format(self.logname, self.iteration))
         self.references.add_references(job)
         return len(job), len(job)
 
@@ -66,25 +66,33 @@ def zodb_main(args=None):
     parser = argparse.ArgumentParser(
         description='Index relations and check for missing ones.')
     parser.add_argument(
-        '--config', metavar='FILE',
+        '--config',
+        metavar='FILE',
         help='use a ZConfig file to specify database')
     parser.add_argument(
-        '--zeo', metavar='ADDRESS',
+        '--zeo',
+        metavar='ADDRESS',
         help='connect to ZEO server instead (host:port or socket name)')
     parser.add_argument(
-        '--storage', metavar='NAME',
-        help='connect to given ZEO storage')
+        '--storage', metavar='NAME', help='connect to given ZEO storage')
     parser.add_argument(
-        '--db', metavar='DATA.FS',
-        help='use given Data.fs file')
+        '--db', metavar='DATA.FS', help='use given Data.fs file')
     parser.add_argument(
-        '--references', metavar='FILE.DB', dest='filename',
+        '--references',
+        metavar='FILE.DB',
+        dest='filename',
         help='save computed references in a database for reuse')
     parser.add_argument(
-        '--override', action="store_true", dest="override", default=False,
+        '--override',
+        action="store_true",
+        dest="override",
+        default=False,
         help='override a reference database')
     parser.add_argument(
-        '--rw', action='store_false', dest='readonly', default=True,
+        '--rw',
+        action='store_false',
+        dest='readonly',
+        default=True,
         help='open the database read-write (default: read-only)')
 
     args = parser.parse_args(args)
@@ -138,17 +146,21 @@ def relstorage_main(args=None):
     parser.add_argument(
         '--batch-size', dest='batch_size', type=int, default=100000)
     parser.add_argument(
-        '--references', metavar='FILE.DB', dest='filename',
+        '--references',
+        metavar='FILE.DB',
+        dest='filename',
         help='save computed references in a database for reuse')
     parser.add_argument(
-        '--override', action="store_true", dest="override", default=False,
+        '--override',
+        action="store_true",
+        dest="override",
+        default=False,
         help='override a reference database')
     parser.add_argument(
         "--quiet", action="store_true", help="suppress non-error messages")
     parser.add_argument(
         "--verbose", action="store_true", help="more verbose output")
-    parser.add_argument(
-        'dsn', help="DSN example: dbname='maas_dev'")
+    parser.add_argument('dsn', help="DSN example: dbname='maas_dev'")
 
     args = parser.parse_args(args)
     mdtools.relstorage.log.setup(args)
@@ -169,8 +181,7 @@ def relstorage_main(args=None):
         dsn=args.dsn,
         worker_task=Reader,
         consumer_task=Writer,
-        consumer_options={
-            'references': references},
+        consumer_options={'references': references},
         queue_size=args.queue_size,
         batch_size=args.batch_size)
 

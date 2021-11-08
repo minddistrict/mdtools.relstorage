@@ -45,21 +45,33 @@ def main(args=None):
             'Generate an SQL file with delete statements to remove '
             'unused objects.'))
     parser.add_argument(
-        '--references', metavar='FILE.DB', dest='refsdb',
+        '--references',
+        metavar='FILE.DB',
+        dest='refsdb',
         help='reference information computed by zodbcheck')
     parser.add_argument(
-        '--blobs', metavar='BLOBS', dest='blobs',
+        '--blobs',
+        metavar='BLOBS',
+        dest='blobs',
         help='directory where blobs are stored')
     parser.add_argument(
-        '--blobs-manifest', metavar='MANIFEST',
+        '--blobs-manifest',
+        metavar='MANIFEST',
         dest='blobs_manifest',
         help='result of "find 0x00 -type f" in blobs directory')
     parser.add_argument(
-        '--lines', metavar='NUMBER', dest='lines', type=int,
-        help='Number of lines per file', default=50000)
+        '--lines',
+        metavar='NUMBER',
+        dest='lines',
+        type=int,
+        help='Number of lines per file',
+        default=50000)
     parser.add_argument(
-        '--output', metavar='OUTPUT', dest='output',
-        help='Output directory', default='pack')
+        '--output',
+        metavar='OUTPUT',
+        dest='output',
+        help='Output directory',
+        default='pack')
     args = parser.parse_args(args)
     try:
         references = mdtools.relstorage.reference.Database(args.refsdb)
@@ -91,10 +103,10 @@ def main(args=None):
     for oid in references.get_unused_oids():
         count_oid += 1
         if sql is None:
-            sql = open(os.path.join(
-                args.output,
-                'todo',
-                'pack-{:06}.sql'.format(filename_count)), 'w')
+            sql = open(
+                os.path.join(
+                    args.output, 'todo',
+                    'pack-{:06}.sql'.format(filename_count)), 'w')
             filename_count += 1
             sql.write('BEGIN;\n')
         sql.write('DELETE FROM object_state WHERE zoid = {};\n'.format(oid))
