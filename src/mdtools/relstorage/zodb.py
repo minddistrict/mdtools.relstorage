@@ -19,8 +19,9 @@ def open(opts):
 
     if opts.db:
         filename = opts.db
-        db = ZODB.DB.DB(ZODB.Filestorage.FileStorage.FileStorage(
-            filename, read_only=opts.readonly))
+        db = ZODB.DB.DB(
+            ZODB.Filestorage.FileStorage.FileStorage(
+                filename, read_only=opts.readonly))
     elif opts.zeo:
         if ':' in opts.zeo:
             # remote hostname:port ZEO connection
@@ -46,8 +47,9 @@ def open(opts):
             zeo_storage = opts.storage
         else:
             zeo_storage = '1'
-        db = ZODB.DB.DB(ZEO.ClientStorage.ClientStorage(
-            zeo_address, storage=zeo_storage, read_only=opts.readonly))
+        db = ZODB.DB.DB(
+            ZEO.ClientStorage.ClientStorage(
+                zeo_address, storage=zeo_storage, read_only=opts.readonly))
     elif opts.config:
         db = ZODB.config.databaseFromFile(io.open(opts.config))
     else:

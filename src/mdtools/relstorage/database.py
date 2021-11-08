@@ -2,13 +2,12 @@ import ZODB.utils
 import contextlib
 import logging
 import time
+import queue
 import multiprocessing
 import dateutil.parser
 import persistent.TimeStamp
 import psycopg2
 import psycopg2.extras
-
-from six.moves import queue
 
 logger = logging.getLogger('mdtools.relstorage.database')
 
@@ -23,6 +22,7 @@ def date_to_tid(date_as_str):
 
 
 # Worker logic
+
 
 class Connection(object):
     _connection = None
@@ -61,10 +61,10 @@ class Ids(Connection):
         params = ()
         if self.min_date is not None:
             where.append('tid > %s')
-            params += (date_to_tid(self.min_date),)
+            params += (date_to_tid(self.min_date), )
         if self.max_date is not None:
             where.append('tid < %s')
-            params += (date_to_tid(self.max_date),)
+            params += (date_to_tid(self.max_date), )
         if where:
             filters = ' WHERE {}'.format(' AND '.join(where))
             sorted_filters = filters + ' ORDER BY tid, zoid'
@@ -76,8 +76,9 @@ class Ids(Connection):
             cursor.execute(
                 "SELECT count(*) FROM object_state" + filters, params)
             self.total = cursor.fetchone()[0]
-            logger.info('master> Found {} objects, estimated {} batch'.format(
-                self.total, (self.total // self.batch_size) + 1))
+            logger.info(
+                'master> Found {} objects, estimated {} batch'.format(
+                    self.total, (self.total // self.batch_size) + 1))
 
         with self.new_cursor(name='ids') as cursor:
             cursor.execute(
@@ -108,8 +109,8 @@ class Progress:
     def _eta(self, completed):
         if not completed:
             return 'n/a'
-        eta = self.start + (
-            (self.ids.total / float(completed)) * (time.time() - self.start))
+        eta = self.start + ((self.ids.total / float(completed)) *
+                            (time.time() - self.start))
         return time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(eta))
 
     def _percent(self, completed):
@@ -122,14 +123,12 @@ class Progress:
                 '({:.2f}% processed, {:.2f}% consumed, eta {}) #{}'.format(
                     self._percent(worker_completed),
                     self._percent(consumer_completed),
-                    self._eta(consumer_completed),
-                    cycle))
+                    self._eta(consumer_completed), cycle))
         else:
             logger.info(
                 'master> Progress ({:.2f}% done, eta {}) #{}'.format(
                     self._percent(worker_completed),
-                    self._eta(worker_completed),
-                    cycle))
+                    self._eta(worker_completed), cycle))
 
 
 class Worker(Connection, multiprocessing.Process):
@@ -166,7 +165,7 @@ class Worker(Connection, multiprocessing.Process):
         batch = []
         with self.new_cursor() as cursor:
             for oid in ids:
-                cursor.execute("EXECUTE fetch_state (%s)", (oid,))
+                cursor.execute("EXECUTE fetch_state (%s)", (oid, ))
                 result = cursor.fetchone()
                 if result:
                     batch.append((bytes(result[0]), oid))
@@ -175,7 +174,8 @@ class Worker(Connection, multiprocessing.Process):
         return batch
 
     def write_batch(self, batch):
-        logger.debug('{}> Write data #{}'.format(self.logname, self.iteration))
+        logger.debug(
+            '{}> Write data #{}'.format(self.logname, self.iteration))
         with self.new_cursor() as cursor:
             psycopg2.extras.execute_batch(
                 cursor,
@@ -331,8 +331,8 @@ def multi_process(
                 incoming.put(job)
         worker = worker_task(
             worker=(
-                dsn, incoming, outgoing, control,
-                outgoing_lock, master_condition),
+                dsn, incoming, outgoing, control, outgoing_lock,
+                master_condition),
             **(worker_options or {}))
         logger.info('master> Starting worker "{}"'.format(worker.logname))
         worker.start()
@@ -365,8 +365,9 @@ def multi_process(
                 worker_ids_changed += worker_status[0]
                 worker_ids_completed += worker_status[1]
             if worker_done:
-                logger.info('master> Worker "{}" is done #{}'.format(
-                    worker_name, cycle))
+                logger.info(
+                    'master> Worker "{}" is done #{}'.format(
+                        worker_name, cycle))
                 worker.join()
                 del workers[worker_name]
                 continue
@@ -393,8 +394,9 @@ def multi_process(
                 except queue.Empty:
                     break
                 if consumer_status is None:
-                    logger.info('master> Consumer "{}" is done #{}'.format(
-                        consumer.logname, cycle))
+                    logger.info(
+                        'master> Consumer "{}" is done #{}'.format(
+                            consumer.logname, cycle))
                     consumer.join()
                     consumer = None
                     break
@@ -404,15 +406,16 @@ def multi_process(
     if worker_ids_completed == ids.total:
         logger.info('master> All done')
     else:
-        logger.error('master> Missed {} objects'.format(
-            ids.total - worker_ids_completed))
+        logger.error(
+            'master> Missed {} objects'.format(
+                ids.total - worker_ids_completed))
     if worker_ids_changed != worker_ids_completed:
-        logger.info('master> Processed {} out of {} ({:.2f}%)'.format(
-            worker_ids_changed,
-            worker_ids_completed,
-            worker_ids_changed * 100.0 / worker_ids_completed))
+        logger.info(
+            'master> Processed {} out of {} ({:.2f}%)'.format(
+                worker_ids_changed, worker_ids_completed,
+                worker_ids_changed * 100.0 / worker_ids_completed))
     if consumer_ids_changed != consumer_ids_completed:
-        logger.info('master> Consumed {} out of {} ({:.2f}%)'.format(
-            consumer_ids_changed,
-            consumer_ids_completed,
-            consumer_ids_changed * 100.0 / consumer_ids_completed))
+        logger.info(
+            'master> Consumed {} out of {} ({:.2f}%)'.format(
+                consumer_ids_changed, consumer_ids_completed,
+                consumer_ids_changed * 100.0 / consumer_ids_completed))

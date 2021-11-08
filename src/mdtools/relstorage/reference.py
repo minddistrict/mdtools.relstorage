@@ -51,7 +51,8 @@ class Database(object):
         cursor = connection.cursor()
         for source_oid, target_oids in records:
             for target_oid in target_oids or [-1]:
-                cursor.execute("""
+                cursor.execute(
+                    """
 INSERT INTO links (source_oid, target_oid) VALUES
 (?, ?)
             """, (source_oid, target_oid))
@@ -66,7 +67,8 @@ INSERT INTO links (source_oid, target_oid) VALUES
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA main.locking_mode=EXCLUSIVE")
         cursor.execute("PRAGMA main.synchronous=OFF")
-        cursor.execute("""
+        cursor.execute(
+            """
 CREATE TABLE IF NOT EXISTS links
 (source_oid BIGINT, target_oid BIGINT)
         """)
@@ -76,10 +78,12 @@ CREATE TABLE IF NOT EXISTS links
     def finish_database(self, connection):
         logger.info('Indexing reference database')
         cursor = connection.cursor()
-        cursor.execute("""
+        cursor.execute(
+            """
 CREATE INDEX IF NOT EXISTS source_oid_index ON links (source_oid)
         """)
-        cursor.execute("""
+        cursor.execute(
+            """
 CREATE INDEX IF NOT EXISTS target_oid_index ON links (target_oid)
         """)
         cursor.execute("PRAGMA main.locking_mode=NORMAL")
@@ -100,7 +104,8 @@ CREATE INDEX IF NOT EXISTS target_oid_index ON links (target_oid)
     def get_unused_oids(self, connection):
         oids = set([])
         cursor = connection.cursor()
-        result = cursor.execute("""
+        result = cursor.execute(
+            """
 WITH RECURSIVE links_to_root (source_oid, target_oid) AS (
     SELECT source_oid, target_oid
     FROM links
@@ -121,7 +126,8 @@ EXCEPT SELECT DISTINCT source_oid FROM links_to_root
     @connect()
     def get_linked_to_oid(self, connection, oid, depth):
         cursor = connection.cursor()
-        result = cursor.execute("""
+        result = cursor.execute(
+            """
 WITH RECURSIVE linked_to_oid (source_oid, depth) AS (
     SELECT source_oid, 1
     FROM links
@@ -143,7 +149,8 @@ SELECT DISTINCT source_oid, depth FROM linked_to_oid WHERE depth = ?
     @connect()
     def get_path_to_oid(self, connection, from_oid, to_oid, depth):
         cursor = connection.cursor()
-        result = cursor.execute("""
+        result = cursor.execute(
+            """
 WITH RECURSIVE path_to_oid (source_oid, parent_oid, depth) AS (
     SELECT source_oid, ?, 1
     FROM links
@@ -178,7 +185,8 @@ SELECT DISTINCT source_oid, parent_oid, depth FROM path_to_oid
     def get_missing_oids(self, connection):
         oids = set()
         cursor = connection.cursor()
-        result = cursor.execute("""
+        result = cursor.execute(
+            """
 SELECT a.target_oid FROM links AS a LEFT OUTER JOIN links AS b
 ON a.target_oid = b.source_oid
 WHERE a.target_oid > -1 AND b.source_oid IS NULL
@@ -191,7 +199,8 @@ WHERE a.target_oid > -1 AND b.source_oid IS NULL
     def get_forward_references(self, connection, oid):
         oids = set()
         cursor = connection.cursor()
-        result = cursor.execute("""
+        result = cursor.execute(
+            """
 SELECT target_oid FROM links
 WHERE source_oid = ? AND target_oid > -1
         """, (ZODB.utils.u64(oid), ))
@@ -203,7 +212,8 @@ WHERE source_oid = ? AND target_oid > -1
     def get_backward_references(self, connection, oid):
         oids = set([])
         cursor = connection.cursor()
-        result = cursor.execute("""
+        result = cursor.execute(
+            """
 SELECT source_oid FROM links
 WHERE target_oid = ?
         """, (ZODB.utils.u64(oid), ))

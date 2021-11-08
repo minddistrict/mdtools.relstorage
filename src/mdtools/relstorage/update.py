@@ -10,13 +10,12 @@ import zodbupdate.serialize
 
 logger = logging.getLogger('mdtools.relstorage.update')
 
-
 # Updater logic
+
 
 def create_processor():
     return zodbupdate.serialize.ObjectRenamer(
-        zodbupdate.main.load_renames().copy(),
-        None)
+        zodbupdate.main.load_renames().copy(), None)
 
 
 class Updater(mdtools.relstorage.database.Worker):
@@ -28,8 +27,8 @@ class Updater(mdtools.relstorage.database.Worker):
     def process(self, ids):
         result = []
         batch = self.read_batch(ids)
-        logger.debug('{}> Processing data #{}'.format(
-            self.logname, self.iteration))
+        logger.debug(
+            '{}> Processing data #{}'.format(self.logname, self.iteration))
         for data, oid in batch:
             try:
                 output_file = self.processor.rename(io.BytesIO(data))
@@ -59,9 +58,7 @@ def relstorage_main(args=None):
         "--quiet", action="store_true", help="suppress non-error messages")
     parser.add_argument(
         "--verbose", action="store_true", help="more verbose output")
-    parser.add_argument(
-        'dsn',
-        help="DSN example: dbname='maas_dev'")
+    parser.add_argument('dsn', help="DSN example: dbname='maas_dev'")
 
     args = parser.parse_args(args)
     mdtools.relstorage.log.setup(args)

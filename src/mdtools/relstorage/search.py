@@ -11,14 +11,17 @@ import mdtools.relstorage.log
 import mdtools.relstorage.zodb
 import mdtools.relstorage.database
 
-
 logger = logging.getLogger('mdtools.relstorage.search')
 
 
 class Search(object):
 
-    def __init__(self, classes=[], search_data=False, analyse_data=False,
-                 no_btrees=True):
+    def __init__(
+            self,
+            classes=[],
+            search_data=False,
+            analyse_data=False,
+            no_btrees=True):
         self.classes = classes
         self.search_data = search_data
         self.analyse_data = analyse_data
@@ -45,24 +48,28 @@ class Search(object):
         if isinstance(class_meta, tuple):
             symb, _ = class_meta
             if isinstance(symb, tuple):
-                self._validate(symb, ZODB.broken.find_global(
-                    *symb, Broken=zodbupdate.serialize.ZODBBroken))
+                self._validate(
+                    symb,
+                    ZODB.broken.find_global(
+                        *symb, Broken=zodbupdate.serialize.ZODBBroken))
                 return symb
-            symb_info = (getattr(symb, '__module__', None),
-                         getattr(symb, '__name__', None))
+            symb_info = (
+                getattr(
+                    symb, '__module__', None), getattr(
+                        symb, '__name__', None))
             self._validate(symb_info, symb)
             return symb_info
         if isinstance(class_meta, type):
-            symb_info = (getattr(class_meta, '__module__', None),
-                         getattr(class_meta, '__name__', None))
+            symb_info = (
+                getattr(class_meta, '__module__', None),
+                getattr(class_meta, '__name__', None))
             self._validate(symb_info, class_meta)
             return symb_info
         return None
 
     def _find_global(self, *cls_info):
         cls = ZODB.broken.find_global(
-            *cls_info,
-            Broken=zodbupdate.serialize.ZODBBroken)
+            *cls_info, Broken=zodbupdate.serialize.ZODBBroken)
         self._validate(cls_info, cls)
         return cls
 
@@ -80,9 +87,7 @@ class Search(object):
     def search(self, data, oid):
         self._current_oid = oid
         unpickler = zodbupdate.utils.Unpickler(
-            io.BytesIO(data),
-            self._persistent_load,
-            self._find_global)
+            io.BytesIO(data), self._persistent_load, self._find_global)
         symb = self._read_class_meta(unpickler.load())
         if isinstance(symb, tuple):
             name = '.'.join(symb)
@@ -122,8 +127,7 @@ class Searcher(Search, mdtools.relstorage.database.Worker):
     def process(self, ids):
         done = 0
         batch = self.read_batch(ids)
-        logger.debug('{}> Searching #{}'.format(
-            self.logname, self.iteration))
+        logger.debug('{}> Searching #{}'.format(self.logname, self.iteration))
         for data, oid in batch:
             try:
                 self.search(data, oid)
@@ -147,17 +151,22 @@ def zodb_main(args=None):
     parser = argparse.ArgumentParser(
         description='Search if Python classes are used in a database.')
     parser.add_argument(
-        '--config', metavar='FILE',
+        '--config',
+        metavar='FILE',
         help='use a ZConfig file to specify database')
     parser.add_argument(
-        '--zeo', metavar='ADDRESS',
+        '--zeo',
+        metavar='ADDRESS',
         help='connect to ZEO server instead (host:port or socket name)')
     parser.add_argument(
         '--storage', metavar='NAME', help='connect to given ZEO storage')
     parser.add_argument(
         '--db', metavar='DATA.FS', help='use given Data.fs file')
     parser.add_argument(
-        '--data', action="store_true", dest="search_data", default=False,
+        '--data',
+        action="store_true",
+        dest="search_data",
+        default=False,
         help='check inside persisted data too')
     parser.add_argument(
         "--quiet", action="store_true", help="suppress non-error messages")
@@ -172,9 +181,7 @@ def zodb_main(args=None):
     except ValueError as error:
         parser.error(error.args[0])
 
-    search = Search(
-        classes=args.classes,
-        search_data=args.search_data)
+    search = Search(classes=args.classes, search_data=args.search_data)
     for transaction in db._storage.iterator():
         for record in transaction:
             search.search(record.data, ZODB.utils.u64(record.oid))
@@ -194,20 +201,28 @@ def relstorage_main(args=None):
     parser.add_argument(
         '--max-date', help='Search in transaction before this date')
     parser.add_argument(
-        '--data', action="store_true", dest="search_data", default=False,
+        '--data',
+        action="store_true",
+        dest="search_data",
+        default=False,
         help='check inside persisted data too')
     parser.add_argument(
-        '--analyse', action="store_true", dest="analyse_data", default=False,
+        '--analyse',
+        action="store_true",
+        dest="analyse_data",
+        default=False,
         help='analyse and report statistics about all records')
     parser.add_argument(
-        '--no-btrees', action="store_true", dest="no_btrees", default=True,
+        '--no-btrees',
+        action="store_true",
+        dest="no_btrees",
+        default=True,
         help='ignore btrees while analyse')
     parser.add_argument(
         "--quiet", action="store_true", help="suppress non-error messages")
     parser.add_argument(
         "--verbose", action="store_true", help="more verbose output")
-    parser.add_argument(
-        'dsn', help="DSN example: dbname='maas_dev'")
+    parser.add_argument('dsn', help="DSN example: dbname='maas_dev'")
     parser.add_argument('classes', metavar='classes', nargs='*')
 
     args = parser.parse_args(args)
@@ -219,7 +234,8 @@ def relstorage_main(args=None):
             'classes': args.classes,
             'search_data': args.search_data,
             'analyse_data': args.analyse_data,
-            'no_btrees': args.no_btrees},
+            'no_btrees': args.no_btrees
+        },
         queue_size=args.queue_size,
         batch_size=args.batch_size,
         min_date=args.min_date,
